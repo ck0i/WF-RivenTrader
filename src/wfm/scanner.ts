@@ -377,6 +377,15 @@ export class RivenTraderService {
     return this.reference?.rivenWeapons ?? [];
   }
 
+  private buildRemoteImageMap(): Map<string, string> {
+    const map = new Map<string, string>();
+    const source = this.remoteReference?.rivenWeapons ?? this.reference?.rivenWeapons ?? [];
+    for (const weapon of source) {
+      if (weapon.imageName) map.set(weapon.slug, weapon.imageName);
+    }
+    return map;
+  }
+
   getDispositionSignals(sinceSeconds: number = 30 * 24 * 60 * 60): Map<string, "rising" | "falling"> {
     const map = new Map<string, "rising" | "falling">();
     if (!this.history) return map;
@@ -393,11 +402,18 @@ export class RivenTraderService {
   getState(): DashboardState {
     if (this.mode === "remote") {
       if (this.remoteState) {
+        const imageMap = this.buildRemoteImageMap();
         return {
           ...this.remoteState,
           scanMode: "remote",
           generatedAt: new Date().toISOString(),
           status: { ...this.status },
+          opportunities: imageMap.size > 0
+            ? this.remoteState.opportunities.map((opportunity) => opportunity.imageName ? opportunity : { ...opportunity, ...(imageMap.get(opportunity.weaponSlug) ? { imageName: imageMap.get(opportunity.weaponSlug)! } : {}) })
+            : this.remoteState.opportunities,
+          weaponSummaries: imageMap.size > 0
+            ? this.remoteState.weaponSummaries.map((summary) => summary.imageName ? summary : { ...summary, ...(imageMap.get(summary.slug) ? { imageName: imageMap.get(summary.slug)! } : {}) })
+            : this.remoteState.weaponSummaries,
         };
       }
       return {
