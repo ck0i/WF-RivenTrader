@@ -105,8 +105,8 @@ export function readLaunchConfig(args: string[], env: NodeJS.ProcessEnv): Launch
   if (minBuy !== undefined) traderConfig.minBuyPrice = minBuy;
   if (maxSell !== undefined) traderConfig.maxSellPrice = maxSell;
 
-  const scanModeRaw = (env.WFM_SCAN_MODE ?? "tiered").trim().toLowerCase();
-  const scanMode: ScanMode = scanModeRaw === "full" ? "full" : scanModeRaw === "remote" ? "remote" : "tiered";
+  const scanModeRaw = (env.WFM_SCAN_MODE ?? "remote").trim().toLowerCase();
+  const scanMode: ScanMode = scanModeRaw === "full" ? "full" : scanModeRaw === "tiered" ? "tiered" : scanModeRaw === "local" ? "tiered" : "remote";
   const historyEnabled = env.WFM_HISTORY_ENABLED !== "0" && env.WFM_HISTORY !== "0";
   const historyDbPath = (env.WFM_HISTORY_DB ?? ".cache/wf-riventrader/history.db").trim();
   const remoteDataUrl = env.WFM_DATA_URL === "off" || env.WFM_DATA_URL === ""
