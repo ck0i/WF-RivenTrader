@@ -15,69 +15,146 @@
     <div class="badges">
       <span id="sseBadge" class="badge warn">SSE connecting</span>
       <span id="scanBadge" class="badge">scan idle</span>
-      <span class="badge good">MCP SSE: /mcp/sse</span>
+      <button id="mcpConnectButton" class="badge good badge-button" type="button" title="Show MCP client config">Connect MCP ↗</button>
     </div>
   </header>
 
+  <div id="mcpModal" class="modal" hidden>
+    <div class="modal-backdrop" data-modal-close></div>
+    <div class="modal-dialog panel">
+      <button class="modal-close" data-modal-close type="button" aria-label="Close">×</button>
+      <h2>Connect an MCP client to this dashboard</h2>
+      <p class="small">Your local WF-RivenTrader is already serving MCP over legacy SSE. Point any MCP-aware client at the endpoint below and it'll see all tools — health check, opportunities, instant wins, trait valuation, and more.</p>
+
+      <div class="mcp-block">
+        <div class="mcp-block-head"><h3>SSE endpoint</h3><button class="mcp-copy" data-copy-target="mcpEndpoint" type="button">Copy</button></div>
+        <code id="mcpEndpoint" class="mcp-endpoint"></code>
+      </div>
+
+      <div class="mcp-block">
+        <div class="mcp-block-head"><h3>Claude Desktop <span class="small">(via mcp-remote proxy)</span></h3><button class="mcp-copy" data-copy-target="mcpConfigDesktop" type="button">Copy config</button></div>
+        <p class="small">Paste into <code>%APPDATA%\Claude\claude_desktop_config.json</code> (Windows) or <code>~/Library/Application Support/Claude/claude_desktop_config.json</code> (macOS), then restart Claude Desktop.</p>
+        <pre><code id="mcpConfigDesktop"></code></pre>
+      </div>
+
+      <div class="mcp-block">
+        <div class="mcp-block-head"><h3>Claude Code CLI</h3><button class="mcp-copy" data-copy-target="mcpConfigCli" type="button">Copy command</button></div>
+        <pre><code id="mcpConfigCli"></code></pre>
+      </div>
+
+      <div class="mcp-block">
+        <div class="mcp-block-head"><h3>Native MCP-SSE clients</h3></div>
+        <p class="small">Point them at the SSE endpoint directly. The server also accepts JSON-RPC POSTs at <code>/mcp/messages?sessionId=…</code> where the sessionId is delivered by the first <code>endpoint</code> SSE event.</p>
+      </div>
+
+      <div class="mcp-block">
+        <div class="mcp-block-head"><h3>Available tools</h3><button id="mcpTestButton" class="secondary" type="button">Test connection</button></div>
+        <div id="mcpTestResult" class="small"></div>
+        <ul id="mcpToolList" class="mcp-tool-list"></ul>
+      </div>
+    </div>
+  </div>
+
   <main class="grid">
     <aside class="panel controls">
-      <h2>Profit controls</h2>
-      <form id="filters">
-        <label>Watchlist weapon slugs or names
-          <textarea id="watchlist" placeholder="blank = all riven weapons\nwar\nkuva bramma"></textarea>
-        </label>
-        <div class="inline">
-          <label>Min profit (plat)
-            <input id="minProfit" type="number" min="0" step="1" value="25" />
+      <details class="section" open>
+        <summary><h2>Profit controls</h2></summary>
+        <form id="filters">
+          <label>Watchlist weapon slugs or names
+            <textarea id="watchlist" placeholder="blank = all riven weapons&#10;war&#10;kuva bramma"></textarea>
           </label>
-          <label>Min ROI
-            <input id="minRoi" type="number" min="0" step="0.05" value="0.35" />
+          <div class="inline">
+            <label>Min profit (plat)
+              <input id="minProfit" type="number" min="0" step="1" value="25" />
+            </label>
+            <label>Min ROI
+              <input id="minRoi" type="number" min="0" step="0.05" value="0.35" />
+            </label>
+          </div>
+          <div class="inline">
+            <label>Min buy price
+              <input id="minBuyPrice" type="number" min="0" step="1" placeholder="none" />
+            </label>
+            <label>Max buy price
+              <input id="maxBuyPrice" type="number" min="0" step="1" placeholder="none" />
+            </label>
+          </div>
+          <div class="inline">
+            <label>Min comps
+              <input id="minGroupSize" type="number" min="2" step="1" value="4" />
+            </label>
+            <label>Max target sell
+              <input id="maxSellPrice" type="number" min="0" step="1" placeholder="none" />
+            </label>
+          </div>
+          <label>Max results
+            <input id="maxResults" type="number" min="5" max="500" step="5" value="75" />
           </label>
-        </div>
-        <div class="inline">
-          <label>Min buy price
-            <input id="minBuyPrice" type="number" min="0" step="1" placeholder="none" />
-          </label>
-          <label>Max buy price
-            <input id="maxBuyPrice" type="number" min="0" step="1" placeholder="none" />
-          </label>
-        </div>
-        <div class="inline">
-          <label>Min comps
-            <input id="minGroupSize" type="number" min="2" step="1" value="4" />
-          </label>
-          <label>Max target sell
-            <input id="maxSellPrice" type="number" min="0" step="1" placeholder="none" />
-          </label>
-        </div>
-        <label>Max results
-          <input id="maxResults" type="number" min="5" max="500" step="5" value="75" />
-        </label>
-        <div class="small">Seller status filter</div>
-        <div class="checks">
-          <label><input class="status" type="checkbox" value="ingame" checked />ingame</label>
-          <label><input class="status" type="checkbox" value="online" checked />online</label>
-          <label><input class="status" type="checkbox" value="offline" />offline</label>
-        </div>
-        <div class="actions">
-          <button id="apply" type="submit">Apply + refresh</button>
-          <button id="refresh" class="secondary" type="button">Refresh now</button>
-        </div>
-      </form>
+          <div class="small">Seller status filter</div>
+          <div class="checks">
+            <label><input class="status" type="checkbox" value="ingame" checked />ingame</label>
+            <label><input class="status" type="checkbox" value="online" checked />online</label>
+            <label><input class="status" type="checkbox" value="offline" />offline</label>
+          </div>
+          <div class="actions">
+            <button id="apply" type="submit">Apply + refresh</button>
+            <button id="refresh" class="secondary" type="button">Refresh now</button>
+          </div>
+        </form>
+      </details>
+
+      <details class="section" open>
+        <summary><h2>Weapon browser</h2></summary>
+        <p class="small">Search all riven weapons (name, slug, group).</p>
+        <input id="weaponSearch" class="search-input" type="search" placeholder="e.g. bramma, kuva, melee…" autocomplete="off" />
+        <div id="weaponResults" class="weapon-results"><div class="small">Loading…</div></div>
+      </details>
+
+      <details class="section">
+        <summary><h2>Trait lookup</h2></summary>
+        <p class="small">What does a riven with these stats normally sell for?</p>
+        <form id="signatureForm">
+          <label>Weapon slug<input id="sigWeapon" type="text" placeholder="e.g. war" /></label>
+          <label>Positives (comma / newline)<textarea id="sigPositives" placeholder="critical_chance&#10;critical_damage"></textarea></label>
+          <label>Negatives<textarea id="sigNegatives" placeholder="zoom"></textarea></label>
+          <button id="sigSubmit" type="submit">Look up</button>
+        </form>
+        <div id="sigResult" class="sig-result small">No lookup yet.</div>
+      </details>
     </aside>
 
     <section class="content">
       <div class="stats">
         <div class="panel stat"><div id="statOpps" class="value">0</div><div class="label">opportunities</div></div>
-        <div class="panel stat"><div id="statWeapons" class="value">0</div><div class="label">weapons scanned</div></div>
+        <div class="panel stat"><div id="statWeapons" class="value">0</div><div class="label">weapons with data</div><div id="statWeaponsSub" class="stat-sub"></div></div>
         <div class="panel stat"><div id="statAuctions" class="value">0</div><div class="label">live auctions</div></div>
         <div class="panel stat"><div id="statBest" class="value">0p</div><div class="label">best profit</div></div>
         <div class="panel stat"><div id="statRefresh" class="value">—</div><div class="label">last update</div></div>
       </div>
 
+      <section class="panel instant-wins">
+        <div class="table-head">
+          <div>
+            <h2>Instant wins <span class="badge good">signature undervalued</span></h2>
+            <p id="instantSummary">Waiting for history to accumulate. Instant wins need at least ~8 samples of a signature over 30 days.</p>
+          </div>
+        </div>
+        <div id="instantList" class="instant-list"></div>
+      </section>
+
       <section class="panel chart-panel">
-        <h2>Top profit curve</h2>
-        <div class="chart-wrap"><canvas id="profitChart" width="1200" height="300"></canvas></div>
+        <h2>ROI vs profit (per opportunity, coloured by tier — hover to inspect, click to open)</h2>
+        <div class="chart-wrap">
+          <canvas id="profitChart" width="1200" height="320"></canvas>
+          <div id="chartTip" class="chart-tip" hidden></div>
+        </div>
+        <div class="legend">
+          <span class="dot tier-A"></span>A
+          <span class="dot tier-B"></span>B
+          <span class="dot tier-C"></span>C
+          <span class="dot tier-D"></span>D
+          <span class="dot undervalued"></span>undervalued signature
+        </div>
       </section>
 
       <section class="panel table-panel">
@@ -91,7 +168,7 @@
           <table>
             <thead>
               <tr>
-                <th data-sort="rank">Rank</th><th data-sort="weaponName">Weapon / riven</th><th data-sort="buyPrice">Buy</th><th data-sort="targetSellPrice">Target</th><th data-sort="expectedProfit">Profit</th><th data-sort="roi">ROI</th><th data-sort="seller">Seller</th><th data-sort="comparableListings">Comps</th><th>Stats</th><th data-sort="score">Score</th>
+                <th data-sort="rank">Rank</th><th data-sort="weaponName">Weapon / riven</th><th data-sort="buyPrice">Buy</th><th data-sort="targetSellPrice">Target</th><th data-sort="expectedProfit">Profit</th><th data-sort="roi">ROI</th><th data-sort="seller">Seller</th><th data-sort="comparableListings">Comps</th><th>Signals</th><th data-sort="score">Score</th>
               </tr>
             </thead>
             <tbody id="opps"></tbody>
@@ -106,7 +183,7 @@
     </section>
   </main>
 
-  <footer><main>Data from public Warframe.market endpoints. No login, no posting, no browser scraping. Rate-limited to the POC-measured budget. Dashboard also polls `/api/state` once per minute as a backstop to the live SSE stream.</main></footer>
+  <footer><main>Data from public Warframe.market endpoints. No login, no posting, no browser scraping. Rate-limited to the POC-measured budget. Dashboard polls `/api/opportunities` and `/api/instant-wins` behind the live SSE state stream.</main></footer>
   <script type="module" src="/app.js"></script>
 </body>
 </html>
