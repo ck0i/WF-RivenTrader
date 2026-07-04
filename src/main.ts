@@ -58,6 +58,7 @@ export async function main(): Promise<void> {
     coldIntervalMs: launch.coldIntervalMs,
     emitDebounceMs: launch.emitDebounceMs,
     ...(history ? { history } : {}),
+    ...(launch.remoteDataUrl ? { remoteDataUrl: launch.remoteDataUrl } : {}),
   });
   const server = createAppServer(service, launch.remoteDataUrl ? { remoteFallback: { url: launch.remoteDataUrl } } : {});
   await listen(server, launch.port, launch.host);
@@ -103,7 +104,7 @@ export function readLaunchConfig(args: string[], env: NodeJS.ProcessEnv): Launch
   if (maxSell !== undefined) traderConfig.maxSellPrice = maxSell;
 
   const scanModeRaw = (env.WFM_SCAN_MODE ?? "tiered").trim().toLowerCase();
-  const scanMode: ScanMode = scanModeRaw === "full" ? "full" : "tiered";
+  const scanMode: ScanMode = scanModeRaw === "full" ? "full" : scanModeRaw === "remote" ? "remote" : "tiered";
   const historyEnabled = env.WFM_HISTORY_ENABLED !== "0" && env.WFM_HISTORY !== "0";
   const historyDbPath = (env.WFM_HISTORY_DB ?? ".cache/wf-riventrader/history.db").trim();
   const remoteDataUrl = env.WFM_DATA_URL === "off" || env.WFM_DATA_URL === ""

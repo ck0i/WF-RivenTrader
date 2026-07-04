@@ -140,6 +140,7 @@ export interface DashboardState {
   generatedAt: string;
   refreshMs: number;
   apiBase: string;
+  scanMode?: "tiered" | "full" | "remote";
   config: TraderConfig;
   status: ScanStatus;
   reference: {

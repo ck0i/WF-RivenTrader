@@ -31,6 +31,8 @@ const elements = {
   sigResult: document.getElementById("sigResult"),
   weaponSearch: document.getElementById("weaponSearch"),
   weaponResults: document.getElementById("weaponResults"),
+  modeButtons: document.querySelectorAll(".mode-btn"),
+  modeHint: document.getElementById("modeHint"),
   mcpButton: document.getElementById("mcpConnectButton"),
   mcpModal: document.getElementById("mcpModal"),
   mcpEndpoint: document.getElementById("mcpEndpoint"),
@@ -99,6 +101,7 @@ function render(state) {
   elements.statBest.textContent = best ? `${best.expectedProfit}p` : "0p";
   elements.statRefresh.textContent = shortTime(state.status.finishedAt || state.generatedAt);
   elements.summary.textContent = state.status.lastError ? state.status.lastError : state.status.lastMessage;
+  updateModeUi(state.scanMode ?? "tiered");
   renderWeapons(state.weaponSummaries);
   if (latestEnrichedOpps.length === 0) {
     renderTable(sortedOpportunities(state.opportunities));
@@ -576,6 +579,43 @@ setInterval(() => {
 window.addEventListener("resize", () => {
   drawChart(latestEnrichedOpps.length > 0 ? latestEnrichedOpps : latestState?.opportunities ?? []);
 });
+
+// -------- Data source toggle --------
+
+function updateModeUi(activeMode) {
+  const normalized = activeMode === "remote" ? "remote" : "tiered";
+  for (const button of elements.modeButtons) {
+    button.classList.toggle("active", button.dataset.mode === normalized);
+  }
+  if (elements.modeHint) {
+    elements.modeHint.textContent = normalized === "remote"
+      ? "Reading the CI-published feed. Refreshes every ~45s; no warframe.market traffic from this browser."
+      : "Local tiered scan is active. Uses this machine's IP against warframe.market with a token-bucket limiter.";
+  }
+}
+
+async function switchMode(mode) {
+  try {
+    const response = await fetch("/api/mode", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode }) });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      elements.summary.textContent = `Mode switch failed: ${payload.error ?? response.status}`;
+      return;
+    }
+    render(await response.json());
+    await refreshDerived();
+  } catch (error) {
+    elements.summary.textContent = `Mode switch failed: ${error.message}`;
+  }
+}
+
+for (const button of elements.modeButtons) {
+  button.addEventListener("click", () => {
+    const mode = button.dataset.mode;
+    if (!mode || button.classList.contains("active")) return;
+    switchMode(mode);
+  });
+}
 
 // -------- MCP connect modal --------
 

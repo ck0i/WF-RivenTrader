@@ -128,6 +128,23 @@ export function createAppServer(service: RivenTraderService, options: AppServerO
         sendJson(response, 202, service.getState());
         return;
       }
+      if (request.method === "POST" && url.pathname === "/api/mode") {
+        const payload = await readRequestJson(request);
+        const modeRaw = (isRecord(payload) ? readString(payload, "mode") : undefined) ?? "";
+        const nextMode = modeRaw === "remote" ? "remote" : modeRaw === "full" ? "full" : modeRaw === "tiered" ? "tiered" : null;
+        if (!nextMode) {
+          sendJson(response, 400, { error: "mode must be one of tiered|full|remote" });
+          return;
+        }
+        try {
+          service.setMode(nextMode);
+          sendJson(response, 200, service.getState());
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          sendJson(response, 400, { error: message });
+        }
+        return;
+      }
       if (request.method === "GET") {
         await serveStatic(response, publicDir, url.pathname);
         return;

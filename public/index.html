@@ -57,6 +57,15 @@
 
   <main class="grid">
     <aside class="panel controls">
+      <div class="mode-toggle">
+        <div class="mode-title">Data source</div>
+        <div class="mode-buttons" role="tablist">
+          <button type="button" class="mode-btn" data-mode="tiered">Local scan</button>
+          <button type="button" class="mode-btn" data-mode="remote">CI feed</button>
+        </div>
+        <div id="modeHint" class="mode-hint small">Local scan runs warframe.market fetches from this machine. CI feed reads the shared state.json published by the GitHub Actions scanner.</div>
+      </div>
+
       <details class="section" open>
         <summary><h2>Profit controls</h2></summary>
         <form id="filters">

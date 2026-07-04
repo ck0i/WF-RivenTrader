@@ -29,6 +29,15 @@ h2 { margin: 0 0 14px; font-size: 15px; letter-spacing: .08em; text-transform: u
 .controls textarea { min-height: 92px; resize: vertical; }
 .controls input:focus, .controls textarea:focus { border-color: var(--accent-2); }
 
+/* Data source toggle at top of sidebar */
+.mode-toggle { padding: 12px 0 14px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+.mode-title { color: var(--muted); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 8px; }
+.mode-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; background: #0c141d; border: 1px solid var(--border); border-radius: 12px; padding: 4px; }
+.mode-btn { background: transparent; color: var(--muted); border: 0; border-radius: 8px; padding: 8px 4px; font-size: 12px; font-weight: 700; cursor: pointer; letter-spacing: .04em; text-transform: uppercase; transition: background .15s ease, color .15s ease; }
+.mode-btn:hover:not(.active) { color: var(--text); background: rgba(125,180,255,.06); }
+.mode-btn.active { background: linear-gradient(135deg, var(--accent), #9affdf); color: #07100d; box-shadow: 0 4px 14px rgba(113,246,197,.18); }
+.mode-hint { margin-top: 10px; line-height: 1.5; color: var(--muted); }
+
 /* Collapsible sidebar sections */
 .controls .section { border-bottom: 1px solid var(--border); padding: 12px 0; }
 .controls .section:last-of-type { border-bottom: 0; padding-bottom: 4px; }

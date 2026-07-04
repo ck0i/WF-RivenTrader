@@ -4,7 +4,7 @@ import { analyzeMarket, DEFAULT_CONFIG, normalizeConfig, slugify, type MarketAna
 import type { DashboardState, ReferenceSnapshot, RivenAuction, RivenWeapon, ScanStatus, TraderConfig } from "./types.js";
 
 export type ScanTier = "hot" | "cold" | "full";
-export type ScanMode = "tiered" | "full";
+export type ScanMode = "tiered" | "full" | "remote";
 
 export interface ScannerOptions {
   client: WarframeMarketClient;
@@ -19,6 +19,8 @@ export interface ScannerOptions {
   coldIntervalMs?: number;
   emitDebounceMs?: number;
   history?: PriceHistoryStore;
+  remoteDataUrl?: string;
+  remotePollMs?: number;
 }
 
 type StateListener = (state: DashboardState) => void;
@@ -52,12 +54,17 @@ export class RivenTraderService {
   readonly refreshMs: number;
   readonly concurrency: number;
   readonly weaponLimit: number | null;
-  readonly scanMode: ScanMode;
+  private mode: ScanMode;
   readonly hotSize: number;
   readonly coldSliceSize: number;
   readonly hotIntervalMs: number;
   readonly coldIntervalMs: number;
   readonly emitDebounceMs: number;
+  readonly remoteDataUrl: string | undefined;
+  readonly remotePollMs: number;
+  private remoteState: DashboardState | null = null;
+  private lastRemoteFetchAt = 0;
+  private scanGeneration = 0;
 
   constructor(options: ScannerOptions) {
     this.client = options.client;
@@ -66,13 +73,40 @@ export class RivenTraderService {
     this.refreshMs = Math.max(60_000, options.refreshMs ?? 60_000);
     this.concurrency = Math.max(1, Math.floor(options.concurrency ?? 4));
     this.weaponLimit = options.weaponLimit === undefined ? null : options.weaponLimit;
-    this.scanMode = options.scanMode ?? "tiered";
+    this.mode = options.scanMode ?? "tiered";
     this.hotSize = Math.max(1, Math.floor(options.hotSize ?? 40));
     this.coldSliceSize = Math.max(1, Math.floor(options.coldSliceSize ?? 150));
     this.hotIntervalMs = Math.max(60_000, options.hotIntervalMs ?? 5 * 60_000);
     this.coldIntervalMs = Math.max(this.hotIntervalMs, options.coldIntervalMs ?? 60 * 60_000);
     this.emitDebounceMs = Math.max(100, options.emitDebounceMs ?? 1500);
+    this.remoteDataUrl = options.remoteDataUrl;
+    this.remotePollMs = Math.max(15_000, options.remotePollMs ?? 45_000);
     this.hydrateFromHistory();
+  }
+
+  get scanMode(): ScanMode {
+    return this.mode;
+  }
+
+  setMode(next: ScanMode): ScanMode {
+    if (next === this.mode) return this.mode;
+    if (next === "remote" && !this.remoteDataUrl) throw new Error("remote mode requires a data URL");
+    this.stop();
+    this.activeRefresh = null;
+    this.scanGeneration += 1;
+    this.mode = next;
+    this.remoteState = null;
+    this.status = {
+      ...this.status,
+      running: false,
+      reason: `switching-to-${next}`,
+      scannedWeapons: 0,
+      totalWeapons: 0,
+      lastMessage: `Switched to ${next} mode`,
+    };
+    delete this.status.lastError;
+    this.start();
+    return this.mode;
   }
 
   private hydrateFromHistory(): void {
@@ -99,7 +133,11 @@ export class RivenTraderService {
 
   start(): void {
     if (this.timers.length > 0) return;
-    if (this.scanMode === "tiered") {
+    if (this.mode === "remote") {
+      this.startRemotePolling();
+      return;
+    }
+    if (this.mode === "tiered") {
       this.scheduleNextRefreshAt();
       this.timers.push(setInterval(() => {
         this.scheduleNextRefreshAt();
@@ -116,6 +154,65 @@ export class RivenTraderService {
         void this.refresh("scheduled", "full");
       }, this.refreshMs));
       void this.refresh("startup", "full");
+    }
+  }
+
+  private startRemotePolling(): void {
+    if (!this.remoteDataUrl) {
+      this.status = {
+        ...this.status,
+        running: false,
+        reason: "remote",
+        lastMessage: "Remote mode requested but no WFM_DATA_URL set. No data source active.",
+      };
+      this.emitStateImmediate();
+      return;
+    }
+    this.status = {
+      initialized: this.status.initialized,
+      running: true,
+      reason: "remote",
+      startedAt: new Date().toISOString(),
+      scannedWeapons: 0,
+      totalWeapons: 0,
+      lastMessage: `Polling ${this.remoteDataUrl} every ${Math.round(this.remotePollMs / 1000)}s`,
+    };
+    this.emitStateImmediate();
+    void this.pollRemote();
+    this.timers.push(setInterval(() => void this.pollRemote(), this.remotePollMs));
+  }
+
+  private async pollRemote(): Promise<void> {
+    if (!this.remoteDataUrl) return;
+    try {
+      const response = await fetch(this.remoteDataUrl);
+      if (!response.ok) {
+        this.status.lastError = `remote ${response.status}`;
+        this.emitStateImmediate();
+        return;
+      }
+      const parsed = await response.json();
+      if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.opportunities)) {
+        this.status.lastError = "remote payload malformed";
+        this.emitStateImmediate();
+        return;
+      }
+      this.remoteState = parsed as DashboardState;
+      this.lastRemoteFetchAt = Date.now();
+      this.status = {
+        initialized: true,
+        running: false,
+        reason: "remote",
+        finishedAt: new Date().toISOString(),
+        scannedWeapons: parsed.status?.scannedWeapons ?? 0,
+        totalWeapons: parsed.status?.totalWeapons ?? 0,
+        lastMessage: `Remote snapshot fetched: ${parsed.totals?.opportunities ?? 0} opportunities`,
+      };
+      delete this.status.lastError;
+      this.emitStateImmediate();
+    } catch (error) {
+      this.status.lastError = error instanceof Error ? error.message : String(error);
+      this.emitStateImmediate();
     }
   }
 
@@ -185,6 +282,28 @@ export class RivenTraderService {
   }
 
   getState(): DashboardState {
+    if (this.mode === "remote") {
+      if (this.remoteState) {
+        return {
+          ...this.remoteState,
+          scanMode: "remote",
+          generatedAt: new Date().toISOString(),
+          status: { ...this.status },
+        };
+      }
+      return {
+        generatedAt: new Date().toISOString(),
+        refreshMs: this.remotePollMs,
+        apiBase: this.remoteDataUrl ?? "remote",
+        scanMode: "remote",
+        config: this.config,
+        status: { ...this.status },
+        reference: { weapons: 0, attributes: 0 },
+        totals: { weaponsWithAuctions: 0, auctions: 0, opportunities: 0 },
+        opportunities: [],
+        weaponSummaries: [],
+      };
+    }
     const weapons = this.reference?.rivenWeapons ?? [];
     const key = this.analysisKey();
     let analysis = this.cachedAnalysis && this.cachedAnalysis.key === key ? this.cachedAnalysis.analysis : null;
@@ -201,8 +320,9 @@ export class RivenTraderService {
     if (this.reference?.versionsUpdatedAt) reference.versionsUpdatedAt = this.reference.versionsUpdatedAt;
     return {
       generatedAt: new Date().toISOString(),
-      refreshMs: this.scanMode === "tiered" ? this.hotIntervalMs : this.refreshMs,
+      refreshMs: this.mode === "tiered" ? this.hotIntervalMs : this.refreshMs,
       apiBase: this.client.baseUrl,
+      scanMode: this.mode,
       config: this.config,
       status: { ...this.status },
       reference,
@@ -226,6 +346,8 @@ export class RivenTraderService {
   }
 
   private async runRefresh(reason: string, tier: ScanTier): Promise<void> {
+    const myGeneration = this.scanGeneration;
+    const stillCurrent = () => this.scanGeneration === myGeneration && this.mode !== "remote";
     const startedAt = new Date().toISOString();
     this.status = {
       initialized: this.status.initialized,
@@ -241,11 +363,13 @@ export class RivenTraderService {
     try {
       if (!this.reference) {
         this.reference = await this.client.loadReference();
+        if (!stillCurrent()) return;
         this.status.initialized = true;
         this.auctionsRevision += 1;
       }
 
       const targets = this.scanTargets(this.reference.rivenWeapons, tier);
+      if (!stillCurrent()) return;
       this.status.totalWeapons = targets.length;
       const tierLabel = this.scanMode === "tiered" && tier !== "full" ? ` (${tier})` : "";
       this.status.lastMessage = targets.length === 0
@@ -255,8 +379,10 @@ export class RivenTraderService {
 
       const scannedThisCycle: string[] = [];
       await this.runWithConcurrency(targets, async (weapon) => {
+        if (!stillCurrent()) return;
         this.status.lastMessage = `Scanning ${weapon.name}${tierLabel}`;
         const auctions = await this.client.searchRivenAuctions(weapon.slug);
+        if (!stillCurrent()) return;
         this.auctionsByWeapon.set(weapon.slug, auctions);
         this.scannedAtByWeapon.set(weapon.slug, new Date().toISOString());
         this.status.scannedWeapons += 1;
@@ -265,6 +391,7 @@ export class RivenTraderService {
         this.emitStateDebounced();
       });
 
+      if (!stillCurrent()) return;
       this.persistScan(scannedThisCycle);
 
       this.status.running = false;
@@ -273,6 +400,7 @@ export class RivenTraderService {
       this.status.lastMessage = `Finished ${reason} scan: ${this.status.scannedWeapons}/${this.status.totalWeapons} weapon books refreshed`;
       this.emitStateImmediate();
     } catch (error) {
+      if (!stillCurrent()) return;
       this.status.running = false;
       this.status.finishedAt = new Date().toISOString();
       this.status.lastError = error instanceof Error ? error.message : String(error);
