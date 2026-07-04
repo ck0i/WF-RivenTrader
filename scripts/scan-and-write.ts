@@ -1,11 +1,19 @@
 /*
  * scripts/scan-and-write.ts — one-shot CI scanner.
  *
- * Runs a single hot/cold/reference pass, writes JSONL rows and JSON snapshots
- * into a `data` directory that CI commits to the `data` branch.
+ * Tiers:
+ *   --tier hot: fetch /v2/versions; if the rivens hash differs from the
+ *               cached reference, refetch weapons + attributes, diff
+ *               dispositions, and write reference/current.json + events.
+ *               ~1-2 API calls when nothing changed.
+ *   --tier cold: full 417-weapon price scan. Publishes state.json,
+ *                opportunities.json, samples/*.jsonl, signatures/*.jsonl,
+ *                and rolls up 30-day valuations into valuations/latest.json.
+ *   --tier reference: same as hot (kept for backward-compat with the old
+ *                     reference-scan workflow).
  */
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { WarframeMarketClient } from "../src/wfm/client.js";
 import { attributeSignature, analyzeMarket, DEFAULT_CONFIG, normalizeConfig } from "../src/wfm/opportunities.js";
@@ -16,21 +24,22 @@ type Tier = "hot" | "cold" | "reference";
 interface Args {
   tier: Tier;
   dataDir: string;
-  hotSize: number;
-  coldSize: number;
   ratePerSecond: number;
   burst: number;
   concurrency: number;
   userAgent: string;
+  valuationWindowDays: number;
+  vanishThresholdDays: number;
 }
 
 interface IndexFile {
   schema_version: 1;
   updated_at: string;
   tiers: {
-    hot?: { last_run_at: string; scanned_slugs: string[] };
-    cold?: { last_run_at: string; cursor: number; scanned_slugs: string[] };
+    hot?: { last_run_at: string; version_hash?: string; reference_changed: boolean };
+    cold?: { last_run_at: string; scanned_slugs: string[]; opportunity_count: number };
     reference?: { last_run_at: string; weapons: number; attributes: number; version_hash?: string };
+    valuations?: { last_run_at: string; signature_count: number; window_days: number };
   };
 }
 
@@ -50,12 +59,12 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): Args {
   return {
     tier,
     dataDir: arg("--data-dir") ?? env.WFM_DATA_DIR ?? "data",
-    hotSize: numberOr(arg("--hot-size") ?? env.WFM_HOT_SIZE, 40),
-    coldSize: numberOr(arg("--cold-size") ?? env.WFM_COLD_SLICE_SIZE, 150),
     ratePerSecond: numberOr(env.WFM_RATE_PER_SEC, 2),
     burst: numberOr(env.WFM_BURST, 10),
     concurrency: numberOr(env.WFM_CONCURRENCY, 3),
     userAgent: env.WFM_USER_AGENT ?? "wf-riventrader-ci/0.1 (+https://github.com/ck0i/WF-RivenTrader)",
+    valuationWindowDays: numberOr(env.WFM_VALUATION_WINDOW_DAYS, 30),
+    vanishThresholdDays: numberOr(env.WFM_VELOCITY_VANISH_DAYS, 3),
   };
 }
 
@@ -78,20 +87,49 @@ async function readJsonIfExists<T>(path: string): Promise<T | null> {
   }
 }
 
-async function loadOrRefreshReference(args: Args, client: WarframeMarketClient): Promise<ReferenceSnapshot> {
+async function runVersionCheck(args: Args, client: WarframeMarketClient): Promise<void> {
   const cachedPath = join(args.dataDir, "reference", "current.json");
   const cached = await readJsonIfExists<ReferenceSnapshot>(cachedPath);
-  if (cached && Array.isArray(cached.rivenWeapons) && cached.rivenWeapons.length > 0 && args.tier !== "reference") {
-    return cached;
+  const versionInfo = await client.versions();
+  const currentHash = versionInfo.collections.rivens ?? "";
+  const previousHash = cached?.versions?.rivens ?? "";
+
+  const referenceChanged = !cached || currentHash === "" || currentHash !== previousHash;
+
+  if (!referenceChanged) {
+    console.log(`Riven versions unchanged (${currentHash || "unknown"}); no reference refresh needed.`);
+    await updateIndex(args.dataDir, {
+      hot: { last_run_at: new Date().toISOString(), version_hash: currentHash, reference_changed: false },
+    });
+    return;
   }
+
+  console.log(
+    cached
+      ? `Riven versions changed (${previousHash || "n/a"} → ${currentHash || "unknown"}); refreshing reference.`
+      : "No cached reference; fetching fresh.",
+  );
   const fresh = await client.loadReference();
   await ensureDir(join(args.dataDir, "reference"));
   await writeFile(cachedPath, JSON.stringify(fresh, null, 2));
-  if (cached && args.tier === "reference") {
+
+  if (cached) {
     const changes = diffDispositions(cached.rivenWeapons, fresh.rivenWeapons);
-    if (changes.length > 0) await appendEvents(args.dataDir, "disposition", changes);
+    if (changes.length > 0) {
+      await appendEvents(args.dataDir, "disposition", changes);
+      console.log(`Wrote ${changes.length} disposition-change events.`);
+    }
   }
-  return fresh;
+
+  await updateIndex(args.dataDir, {
+    hot: { last_run_at: new Date().toISOString(), version_hash: currentHash, reference_changed: true },
+    reference: {
+      last_run_at: new Date().toISOString(),
+      weapons: fresh.rivenWeapons.length,
+      attributes: fresh.rivenAttributes.length,
+      ...(currentHash ? { version_hash: currentHash } : {}),
+    },
+  });
 }
 
 function diffDispositions(previous: RivenWeapon[], current: RivenWeapon[]): Array<Record<string, unknown>> {
@@ -100,11 +138,22 @@ function diffDispositions(previous: RivenWeapon[], current: RivenWeapon[]): Arra
   const nowIso = new Date().toISOString();
   for (const weapon of current) {
     const prior = priorBySlug.get(weapon.slug);
-    if (!prior) continue;
+    if (!prior) {
+      events.push({
+        ts: nowIso,
+        source: "reference-diff",
+        kind_detail: "weapon_added",
+        weapon_slug: weapon.slug,
+        weapon_name: weapon.name,
+        disposition: weapon.disposition,
+      });
+      continue;
+    }
     if (prior.disposition !== weapon.disposition) {
       events.push({
         ts: nowIso,
         source: "reference-diff",
+        kind_detail: "disposition_change",
         weapon_slug: weapon.slug,
         weapon_name: weapon.name,
         old_disposition: prior.disposition,
@@ -125,26 +174,17 @@ async function appendEvents(dataDir: string, kind: string, events: Array<Record<
   await appendFile(path, enriched.join("\n") + "\n", "utf8");
 }
 
-async function pickTargets(args: Args, weapons: RivenWeapon[], index: IndexFile | null): Promise<{ targets: RivenWeapon[]; nextCursor: number }> {
-  if (args.tier === "hot") {
-    const previousOpportunities = await readJsonIfExists<Opportunity[]>(join(args.dataDir, "latest", "opportunities.json"));
-    const opportunitySlugs = new Set((previousOpportunities ?? []).map((opportunity) => opportunity.weaponSlug));
-    const preferred = weapons.filter((weapon) => opportunitySlugs.has(weapon.slug));
-    const fillers = weapons
-      .filter((weapon) => !opportunitySlugs.has(weapon.slug))
-      .sort((a, b) => b.disposition - a.disposition);
-    const combined = [...preferred, ...fillers];
-    return { targets: combined.slice(0, args.hotSize), nextCursor: index?.tiers.cold?.cursor ?? 0 };
-  }
-  const cursor = index?.tiers.cold?.cursor ?? 0;
-  const start = weapons.length === 0 ? 0 : ((cursor % weapons.length) + weapons.length) % weapons.length;
-  const size = Math.min(args.coldSize, weapons.length);
-  const targets: RivenWeapon[] = [];
-  for (let i = 0; i < size; i += 1) {
-    const weapon = weapons[(start + i) % weapons.length];
-    if (weapon !== undefined) targets.push(weapon);
-  }
-  return { targets, nextCursor: weapons.length === 0 ? 0 : (start + size) % weapons.length };
+async function loadCachedReference(dataDir: string): Promise<ReferenceSnapshot | null> {
+  return readJsonIfExists<ReferenceSnapshot>(join(dataDir, "reference", "current.json"));
+}
+
+async function loadOrFetchReference(args: Args, client: WarframeMarketClient): Promise<ReferenceSnapshot> {
+  const cached = await loadCachedReference(args.dataDir);
+  if (cached && Array.isArray(cached.rivenWeapons) && cached.rivenWeapons.length > 0) return cached;
+  const fresh = await client.loadReference();
+  await ensureDir(join(args.dataDir, "reference"));
+  await writeFile(join(args.dataDir, "reference", "current.json"), JSON.stringify(fresh, null, 2));
+  return fresh;
 }
 
 async function runInParallel<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>): Promise<void> {
@@ -207,59 +247,196 @@ function computeSignatureSamples(slug: string, auctions: readonly RivenAuction[]
     }));
 }
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2), process.env);
-  await ensureDir(args.dataDir);
-  const cacheDir = process.env.WFM_CACHE_DIR ?? join(args.dataDir, ".wfm-cache");
-  const client = new WarframeMarketClient({
-    ratePerSecond: args.ratePerSecond,
-    burst: args.burst,
-    userAgent: args.userAgent,
-    cacheDir,
-  });
-  const reference = await loadOrRefreshReference(args, client);
+interface SignatureSampleRow {
+  ts: number;
+  auction_id: string;
+  weapon_slug: string;
+  signature: string;
+  buyout_price: number;
+}
 
-  if (args.tier === "reference") {
-    console.log(`Reference refresh: ${reference.rivenWeapons.length} weapons, ${reference.rivenAttributes.length} attributes.`);
-    const referenceIndex: NonNullable<IndexFile["tiers"]["reference"]> = {
-      last_run_at: new Date().toISOString(),
-      weapons: reference.rivenWeapons.length,
-      attributes: reference.rivenAttributes.length,
-    };
-    if (reference.versions.rivens) referenceIndex.version_hash = reference.versions.rivens;
-    await updateIndex(args.dataDir, { reference: referenceIndex });
-    return;
+interface ValuationOutput {
+  weapon_slug: string;
+  signature: string;
+  sample_count: number;
+  window_days: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  p90: number;
+  min: number;
+  max: number;
+  last_seen_price: number;
+  last_seen_at: number;
+  confidence: number;
+}
+
+interface VelocityOutput {
+  weapon_slug: string;
+  signature: string;
+  observed_listings: number;
+  vanished_listings: number;
+  vanish_rate: number;
+  avg_time_on_market_days: number | null;
+  classification: "fast_moving" | "stuck" | "unknown";
+}
+
+async function rollupValuations(dataDir: string, windowDays: number, vanishThresholdDays: number): Promise<{ valuations: number }> {
+  const nowMs = Date.now();
+  const windowStartMs = nowMs - windowDays * 86_400_000;
+  const vanishThresholdMs = nowMs - vanishThresholdDays * 86_400_000;
+  const sigDir = join(dataDir, "signatures");
+  if (!existsSync(sigDir)) {
+    console.log("No signatures directory; skipping valuation rollup.");
+    return { valuations: 0 };
   }
 
-  const index = await readJsonIfExists<IndexFile>(join(args.dataDir, "index.json"));
-  const { targets, nextCursor } = await pickTargets(args, reference.rivenWeapons, index);
+  const files = (await readdir(sigDir)).filter((f) => f.endsWith(".jsonl")).sort();
+  const bySignature = new Map<string, SignatureSampleRow[]>();
+
+  for (const file of files) {
+    const dateMatch = file.match(/^(\d{4}-\d{2}-\d{2})\.jsonl$/);
+    if (!dateMatch) continue;
+    const fileDay = new Date(dateMatch[1] + "T00:00:00.000Z").getTime();
+    if (Number.isNaN(fileDay) || fileDay < windowStartMs - 86_400_000) continue;
+
+    const content = await readFile(join(sigDir, file), "utf8");
+    for (const line of content.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const row: unknown = JSON.parse(line);
+        if (typeof row !== "object" || row === null) continue;
+        const record = row as Record<string, unknown>;
+        const ts = typeof record.ts === "string"
+          ? new Date(record.ts).getTime()
+          : typeof record.ts === "number"
+          ? record.ts * (record.ts > 1e12 ? 1 : 1000)
+          : Number.NaN;
+        if (!Number.isFinite(ts) || ts < windowStartMs) continue;
+        const auctionId = typeof record.auction_id === "string" ? record.auction_id : "";
+        const weaponSlug = typeof record.weapon_slug === "string" ? record.weapon_slug : "";
+        const signature = typeof record.signature === "string" ? record.signature : "";
+        const buyoutPrice = typeof record.buyout_price === "number" ? record.buyout_price : Number.NaN;
+        if (!auctionId || !weaponSlug || !signature || !Number.isFinite(buyoutPrice) || buyoutPrice <= 0) continue;
+        const key = `${weaponSlug}::${signature}`;
+        const list = bySignature.get(key) ?? [];
+        list.push({ ts, auction_id: auctionId, weapon_slug: weaponSlug, signature, buyout_price: buyoutPrice });
+        bySignature.set(key, list);
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  const valuations: Record<string, ValuationOutput> = {};
+  const velocities: Record<string, VelocityOutput> = {};
+
+  for (const [key, samples] of bySignature) {
+    const first = samples[0];
+    if (first === undefined) continue;
+    const { weapon_slug, signature } = first;
+    const prices = samples.map((s) => s.buyout_price).sort((a, b) => a - b);
+    const min = prices[0] ?? 0;
+    const max = prices[prices.length - 1] ?? 0;
+
+    const auctionLife = new Map<string, { first: number; last: number }>();
+    for (const sample of samples) {
+      const entry = auctionLife.get(sample.auction_id);
+      if (!entry) auctionLife.set(sample.auction_id, { first: sample.ts, last: sample.ts });
+      else {
+        if (sample.ts < entry.first) entry.first = sample.ts;
+        if (sample.ts > entry.last) entry.last = sample.ts;
+      }
+    }
+    const observed = auctionLife.size;
+    let vanished = 0;
+    let ttmSumSec = 0;
+    let ttmCount = 0;
+    for (const [, entry] of auctionLife) {
+      if (entry.last < vanishThresholdMs) {
+        vanished += 1;
+        ttmSumSec += (entry.last - entry.first) / 1000;
+        ttmCount += 1;
+      }
+    }
+    const vanishRate = observed > 0 ? vanished / observed : 0;
+    const avgTtmDays = ttmCount > 0 ? ttmSumSec / ttmCount / 86_400 : null;
+    let classification: VelocityOutput["classification"] = "unknown";
+    if (observed >= 8 && vanishRate >= 0.5 && avgTtmDays !== null && avgTtmDays < 3) classification = "fast_moving";
+    else if (observed >= 10 && vanishRate < 0.2) classification = "stuck";
+
+    const latest = samples.reduce((acc, cur) => (cur.ts > acc.ts ? cur : acc), first);
+
+    valuations[key] = {
+      weapon_slug,
+      signature,
+      sample_count: samples.length,
+      window_days: windowDays,
+      p25: percentile(prices, 0.25),
+      p50: percentile(prices, 0.5),
+      p75: percentile(prices, 0.75),
+      p90: percentile(prices, 0.9),
+      min,
+      max,
+      last_seen_price: latest.buyout_price,
+      last_seen_at: Math.floor(latest.ts / 1000),
+      confidence: 1 - Math.exp(-samples.length / 10),
+    };
+    velocities[key] = {
+      weapon_slug,
+      signature,
+      observed_listings: observed,
+      vanished_listings: vanished,
+      vanish_rate: vanishRate,
+      avg_time_on_market_days: avgTtmDays,
+      classification,
+    };
+  }
+
+  await ensureDir(join(dataDir, "valuations"));
+  const payload = {
+    generatedAt: new Date().toISOString(),
+    windowDays,
+    signatureCount: bySignature.size,
+    keySchema: "weapon_slug::signature",
+    valuations,
+    velocities,
+  };
+  await writeFile(join(dataDir, "valuations", "latest.json"), JSON.stringify(payload, null, 2));
+  return { valuations: bySignature.size };
+}
+
+async function runCold(args: Args, client: WarframeMarketClient): Promise<void> {
+  const reference = await loadOrFetchReference(args, client);
+  const targets = reference.rivenWeapons;
+  console.log(`Cold scan: ${targets.length} riven weapons.`);
 
   const auctionsByWeapon = new Map<string, RivenAuction[]>();
+  let scannedOk = 0;
   await runInParallel(targets, args.concurrency, async (weapon) => {
     try {
       const auctions = await client.searchRivenAuctions(weapon.slug);
       auctionsByWeapon.set(weapon.slug, auctions);
+      scannedOk += 1;
+      if (scannedOk % 25 === 0) console.log(`  ${scannedOk}/${targets.length} weapons scanned`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`skip ${weapon.slug}: ${message}`);
     }
   });
 
-  const merged = new Map<string, RivenAuction[]>();
-  for (const [slug, entries] of auctionsByWeapon) merged.set(slug, entries);
-
   const config = normalizeConfig(DEFAULT_CONFIG);
-  const analysis = analyzeMarket(reference.rivenWeapons, merged, config);
+  const analysis = analyzeMarket(reference.rivenWeapons, auctionsByWeapon, config);
   const nowIso = new Date().toISOString();
   const status: ScanStatus = {
     initialized: true,
     running: false,
-    reason: `ci-${args.tier}`,
+    reason: "ci-cold",
     startedAt: nowIso,
     finishedAt: nowIso,
     scannedWeapons: auctionsByWeapon.size,
-    totalWeapons: auctionsByWeapon.size,
-    lastMessage: `CI ${args.tier} scan wrote ${auctionsByWeapon.size} weapons`,
+    totalWeapons: targets.length,
+    lastMessage: `CI cold scan wrote ${auctionsByWeapon.size}/${targets.length} weapons`,
   };
   const dashboardReference: DashboardState["reference"] = {
     weapons: reference.rivenWeapons.length,
@@ -268,17 +445,17 @@ async function main(): Promise<void> {
   if (reference.versionsUpdatedAt) dashboardReference.versionsUpdatedAt = reference.versionsUpdatedAt;
   const state: DashboardState & CiStateExtras = {
     schemaVersion: 1,
-    tier: args.tier,
+    tier: "cold",
     scannedWeaponSlugs: [...auctionsByWeapon.keys()],
     generatedAt: nowIso,
-    refreshMs: 15 * 60_000,
+    refreshMs: 60 * 60_000,
     apiBase: "https://api.warframe.market",
     config,
     status,
     reference: dashboardReference,
     totals: {
-      weaponsWithAuctions: merged.size,
-      auctions: Array.from(merged.values()).reduce((sum, entries) => sum + entries.length, 0),
+      weaponsWithAuctions: auctionsByWeapon.size,
+      auctions: Array.from(auctionsByWeapon.values()).reduce((sum, entries) => sum + entries.length, 0),
       opportunities: analysis.opportunities.length,
     },
     opportunities: analysis.opportunities,
@@ -306,12 +483,23 @@ async function main(): Promise<void> {
     }
   }
 
-  const tierIndex = args.tier === "hot"
-    ? { hot: { last_run_at: nowIso, scanned_slugs: [...auctionsByWeapon.keys()] } }
-    : { cold: { last_run_at: nowIso, cursor: nextCursor, scanned_slugs: [...auctionsByWeapon.keys()] } };
-  await updateIndex(args.dataDir, tierIndex);
+  const rollup = await rollupValuations(args.dataDir, args.valuationWindowDays, args.vanishThresholdDays);
+  console.log(`Wrote valuations for ${rollup.valuations} signatures.`);
 
-  console.log(`${args.tier} scan: ${auctionsByWeapon.size} weapons, ${analysis.opportunities.length} opportunities, ${samples.length} price samples appended.`);
+  await updateIndex(args.dataDir, {
+    cold: {
+      last_run_at: nowIso,
+      scanned_slugs: [...auctionsByWeapon.keys()],
+      opportunity_count: analysis.opportunities.length,
+    },
+    valuations: {
+      last_run_at: nowIso,
+      signature_count: rollup.valuations,
+      window_days: args.valuationWindowDays,
+    },
+  });
+
+  console.log(`Cold scan finished: ${auctionsByWeapon.size} weapons, ${analysis.opportunities.length} opportunities.`);
 }
 
 async function updateIndex(dataDir: string, patch: Partial<IndexFile["tiers"]>): Promise<void> {
@@ -323,6 +511,25 @@ async function updateIndex(dataDir: string, patch: Partial<IndexFile["tiers"]>):
     tiers: { ...current.tiers, ...patch },
   };
   await writeFile(path, JSON.stringify(next, null, 2));
+}
+
+async function main(): Promise<void> {
+  const args = parseArgs(process.argv.slice(2), process.env);
+  await ensureDir(args.dataDir);
+  const cacheDir = process.env.WFM_CACHE_DIR ?? join(args.dataDir, ".wfm-cache");
+  const client = new WarframeMarketClient({
+    ratePerSecond: args.ratePerSecond,
+    burst: args.burst,
+    userAgent: args.userAgent,
+    cacheDir,
+  });
+
+  if (args.tier === "hot" || args.tier === "reference") {
+    await runVersionCheck(args, client);
+    return;
+  }
+
+  await runCold(args, client);
 }
 
 main().catch((error) => {

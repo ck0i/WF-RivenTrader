@@ -27,6 +27,7 @@ interface LaunchConfig {
   historyEnabled: boolean;
   historyDbPath: string;
   remoteDataUrl: string | undefined;
+  remoteDataBase: string | undefined;
   traderConfig: Partial<TraderConfig>;
 }
 
@@ -59,6 +60,7 @@ export async function main(): Promise<void> {
     emitDebounceMs: launch.emitDebounceMs,
     ...(history ? { history } : {}),
     ...(launch.remoteDataUrl ? { remoteDataUrl: launch.remoteDataUrl } : {}),
+    ...(launch.remoteDataBase ? { remoteDataBase: launch.remoteDataBase } : {}),
   });
   const server = createAppServer(service, launch.remoteDataUrl ? { remoteFallback: { url: launch.remoteDataUrl } } : {});
   await listen(server, launch.port, launch.host);
@@ -110,6 +112,9 @@ export function readLaunchConfig(args: string[], env: NodeJS.ProcessEnv): Launch
   const remoteDataUrl = env.WFM_DATA_URL === "off" || env.WFM_DATA_URL === ""
     ? undefined
     : env.WFM_DATA_URL ?? "https://raw.githubusercontent.com/ck0i/WF-RivenTrader/data/data/latest/state.json";
+  const remoteDataBase = env.WFM_DATA_BASE === "off" || env.WFM_DATA_BASE === ""
+    ? undefined
+    : env.WFM_DATA_BASE ?? "https://raw.githubusercontent.com/ck0i/WF-RivenTrader/data/data";
 
   return {
     host,
@@ -129,6 +134,7 @@ export function readLaunchConfig(args: string[], env: NodeJS.ProcessEnv): Launch
     historyEnabled,
     historyDbPath,
     remoteDataUrl,
+    remoteDataBase,
     traderConfig,
   };
 }

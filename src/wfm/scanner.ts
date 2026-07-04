@@ -20,7 +20,34 @@ export interface ScannerOptions {
   emitDebounceMs?: number;
   history?: PriceHistoryStore;
   remoteDataUrl?: string;
+  remoteDataBase?: string;
   remotePollMs?: number;
+}
+
+interface RemoteValuationEntry {
+  weapon_slug: string;
+  signature: string;
+  sample_count: number;
+  window_days: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  p90: number;
+  min: number;
+  max: number;
+  last_seen_price: number;
+  last_seen_at: number;
+  confidence: number;
+}
+
+interface RemoteVelocityEntry {
+  weapon_slug: string;
+  signature: string;
+  observed_listings: number;
+  vanished_listings: number;
+  vanish_rate: number;
+  avg_time_on_market_days: number | null;
+  classification: "fast_moving" | "stuck" | "unknown";
 }
 
 type StateListener = (state: DashboardState) => void;
@@ -61,9 +88,15 @@ export class RivenTraderService {
   readonly coldIntervalMs: number;
   readonly emitDebounceMs: number;
   readonly remoteDataUrl: string | undefined;
+  readonly remoteDataBase: string | undefined;
   readonly remotePollMs: number;
   private remoteState: DashboardState | null = null;
+  private remoteReference: ReferenceSnapshot | null = null;
+  private readonly remoteValuations = new Map<string, RemoteValuationEntry>();
+  private readonly remoteVelocities = new Map<string, RemoteVelocityEntry>();
   private lastRemoteFetchAt = 0;
+  private lastRemoteReferenceFetchAt = 0;
+  private lastRemoteValuationsFetchAt = 0;
   private scanGeneration = 0;
 
   constructor(options: ScannerOptions) {
@@ -80,8 +113,17 @@ export class RivenTraderService {
     this.coldIntervalMs = Math.max(this.hotIntervalMs, options.coldIntervalMs ?? 60 * 60_000);
     this.emitDebounceMs = Math.max(100, options.emitDebounceMs ?? 1500);
     this.remoteDataUrl = options.remoteDataUrl;
+    this.remoteDataBase = options.remoteDataBase ?? inferRemoteBase(options.remoteDataUrl);
     this.remotePollMs = Math.max(15_000, options.remotePollMs ?? 45_000);
     this.hydrateFromHistory();
+  }
+
+  private remoteUrl(kind: "state" | "reference" | "valuations"): string | undefined {
+    if (kind === "state" && this.remoteDataUrl) return this.remoteDataUrl;
+    if (!this.remoteDataBase) return undefined;
+    if (kind === "state") return `${this.remoteDataBase}/latest/state.json`;
+    if (kind === "reference") return `${this.remoteDataBase}/reference/current.json`;
+    return `${this.remoteDataBase}/valuations/latest.json`;
   }
 
   get scanMode(): ScanMode {
@@ -158,12 +200,13 @@ export class RivenTraderService {
   }
 
   private startRemotePolling(): void {
-    if (!this.remoteDataUrl) {
+    const stateUrl = this.remoteUrl("state");
+    if (!stateUrl) {
       this.status = {
         ...this.status,
         running: false,
         reason: "remote",
-        lastMessage: "Remote mode requested but no WFM_DATA_URL set. No data source active.",
+        lastMessage: "Remote mode requested but no WFM_DATA_URL / WFM_DATA_BASE set. No data source active.",
       };
       this.emitStateImmediate();
       return;
@@ -175,7 +218,7 @@ export class RivenTraderService {
       startedAt: new Date().toISOString(),
       scannedWeapons: 0,
       totalWeapons: 0,
-      lastMessage: `Polling ${this.remoteDataUrl} every ${Math.round(this.remotePollMs / 1000)}s`,
+      lastMessage: `Polling ${stateUrl} every ${Math.round(this.remotePollMs / 1000)}s`,
     };
     this.emitStateImmediate();
     void this.pollRemote();
@@ -183,36 +226,87 @@ export class RivenTraderService {
   }
 
   private async pollRemote(): Promise<void> {
-    if (!this.remoteDataUrl) return;
+    const stateUrl = this.remoteUrl("state");
+    if (!stateUrl) return;
+    const now = Date.now();
+    const promises: Array<Promise<void>> = [this.pollRemoteState(stateUrl)];
+    if (now - this.lastRemoteReferenceFetchAt > 5 * 60_000) promises.push(this.pollRemoteReference());
+    if (now - this.lastRemoteValuationsFetchAt > 5 * 60_000) promises.push(this.pollRemoteValuations());
+    await Promise.all(promises);
+  }
+
+  private async pollRemoteState(url: string): Promise<void> {
     try {
-      const response = await fetch(this.remoteDataUrl);
+      const response = await fetch(url);
       if (!response.ok) {
-        this.status.lastError = `remote ${response.status}`;
+        this.status.lastError = `remote state ${response.status}`;
         this.emitStateImmediate();
         return;
       }
       const parsed = await response.json();
       if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.opportunities)) {
-        this.status.lastError = "remote payload malformed";
+        this.status.lastError = "remote state payload malformed";
         this.emitStateImmediate();
         return;
       }
       this.remoteState = parsed as DashboardState;
       this.lastRemoteFetchAt = Date.now();
+      const scannedWeapons = parsed.status?.scannedWeapons ?? 0;
+      const totalWeapons = parsed.status?.totalWeapons ?? scannedWeapons;
       this.status = {
         initialized: true,
         running: false,
         reason: "remote",
         finishedAt: new Date().toISOString(),
-        scannedWeapons: parsed.status?.scannedWeapons ?? 0,
-        totalWeapons: parsed.status?.totalWeapons ?? 0,
-        lastMessage: `Remote snapshot fetched: ${parsed.totals?.opportunities ?? 0} opportunities`,
+        scannedWeapons,
+        totalWeapons,
+        lastMessage: `Remote snapshot fetched: ${parsed.totals?.opportunities ?? 0} opportunities across ${scannedWeapons} weapons`,
       };
       delete this.status.lastError;
       this.emitStateImmediate();
     } catch (error) {
       this.status.lastError = error instanceof Error ? error.message : String(error);
       this.emitStateImmediate();
+    }
+  }
+
+  private async pollRemoteReference(): Promise<void> {
+    const url = this.remoteUrl("reference");
+    if (!url) return;
+    try {
+      const response = await fetch(url);
+      if (!response.ok) return;
+      const parsed = await response.json();
+      if (parsed && Array.isArray(parsed.rivenWeapons) && Array.isArray(parsed.rivenAttributes)) {
+        this.remoteReference = parsed as ReferenceSnapshot;
+        this.lastRemoteReferenceFetchAt = Date.now();
+      }
+    } catch {
+      // silently skip on network hiccup — retried on next cycle
+    }
+  }
+
+  private async pollRemoteValuations(): Promise<void> {
+    const url = this.remoteUrl("valuations");
+    if (!url) return;
+    try {
+      const response = await fetch(url);
+      if (!response.ok) return;
+      const parsed = await response.json();
+      if (!parsed || typeof parsed !== "object") return;
+      const valuations = parsed.valuations && typeof parsed.valuations === "object" ? parsed.valuations : {};
+      const velocities = parsed.velocities && typeof parsed.velocities === "object" ? parsed.velocities : {};
+      this.remoteValuations.clear();
+      this.remoteVelocities.clear();
+      for (const [key, value] of Object.entries(valuations)) {
+        if (value && typeof value === "object") this.remoteValuations.set(key, value as RemoteValuationEntry);
+      }
+      for (const [key, value] of Object.entries(velocities)) {
+        if (value && typeof value === "object") this.remoteVelocities.set(key, value as RemoteVelocityEntry);
+      }
+      this.lastRemoteValuationsFetchAt = Date.now();
+    } catch {
+      // silently skip; next cycle will retry
     }
   }
 
@@ -247,6 +341,10 @@ export class RivenTraderService {
   }
 
   getSignatureValuation(weaponSlug: string, signature: string, windowDays: number = 30): SignatureValuationResult | null {
+    if (this.mode === "remote") {
+      const remote = this.remoteValuations.get(`${weaponSlug}::${signature}`);
+      if (remote) return { ...remote };
+    }
     if (!this.history) return null;
     try {
       return this.history.signatureValuation(weaponSlug, signature, windowDays);
@@ -256,6 +354,10 @@ export class RivenTraderService {
   }
 
   getSignatureVelocity(weaponSlug: string, signature: string, windowDays: number = 30): SignatureVelocityResult | null {
+    if (this.mode === "remote") {
+      const remote = this.remoteVelocities.get(`${weaponSlug}::${signature}`);
+      if (remote) return { ...remote };
+    }
     if (!this.history) return null;
     try {
       return this.history.signatureVelocity(weaponSlug, signature, windowDays);
@@ -265,6 +367,7 @@ export class RivenTraderService {
   }
 
   getAllWeapons(): RivenWeapon[] {
+    if (this.mode === "remote") return this.remoteReference?.rivenWeapons ?? this.reference?.rivenWeapons ?? [];
     return this.reference?.rivenWeapons ?? [];
   }
 
@@ -520,4 +623,12 @@ export class RivenTraderService {
     const state = this.getState();
     for (const listener of this.listeners) listener(state);
   }
+}
+
+function inferRemoteBase(dataUrl: string | undefined): string | undefined {
+  if (!dataUrl) return undefined;
+  return dataUrl
+    .replace(/\/latest\/state\.json$/, "")
+    .replace(/\/latest\/opportunities\.json$/, "")
+    .replace(/\/state\.json$/, "");
 }
