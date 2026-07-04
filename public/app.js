@@ -134,7 +134,7 @@ function renderTable(opportunities) {
     row.className = `tier-${tier}`;
     row.innerHTML = `
       <td>${index + 1}</td>
-      <td><strong>${escapeHtml(opportunity.weaponName)}</strong><div class="small">${escapeHtml(opportunity.rivenName)}</div></td>
+      <td class="weapon-cell">${weaponThumb(opportunity.imageName, opportunity.weaponName, "sm")}<div><strong>${escapeHtml(opportunity.weaponName)}</strong><div class="small">${escapeHtml(opportunity.rivenName)}</div></div></td>
       <td class="price">${opportunity.buyPrice}p</td>
       <td>${opportunity.targetSellPrice}p<div class="small">median ${opportunity.conservativeSellPrice}p</div></td>
       <td class="profit">+${opportunity.expectedProfit}p</td>
@@ -179,9 +179,12 @@ function renderInstantWins(items) {
     card.className = "instant-card";
     card.innerHTML = `
       <div class="instant-head">
-        <div>
-          <strong>${escapeHtml(opportunity.weaponName)}</strong>
-          <div class="small">${escapeHtml(opportunity.rivenName)}</div>
+        <div class="instant-head-main">
+          ${weaponThumb(opportunity.imageName, opportunity.weaponName, "md")}
+          <div>
+            <strong>${escapeHtml(opportunity.weaponName)}</strong>
+            <div class="small">${escapeHtml(opportunity.rivenName)}</div>
+          </div>
         </div>
         <div class="uplift">+${item.expected_uplift}p</div>
       </div>
@@ -203,7 +206,7 @@ function renderWeapons(summaries) {
     const stats = summary.priceStats;
     const card = document.createElement("article");
     card.className = "panel weapon-card";
-    card.innerHTML = `<h3>${escapeHtml(summary.name)}</h3>
+    card.innerHTML = `<div class="weapon-card-head">${weaponThumb(summary.imageName, summary.name, "lg")}<h3>${escapeHtml(summary.name)}</h3></div>
       <dl>
         <dt>Listings</dt><dd>${summary.directListings}</dd>
         <dt>Online</dt><dd>${summary.onlineListings}</dd>
@@ -338,6 +341,7 @@ if (elements.chart) {
       const signals = (opportunity.quality?.signals ?? []).slice(0, 3).map((s) => `<span class="signal signal-${s}">${s.replace(/_/g, " ")}</span>`).join("");
       elements.chartTip.innerHTML = `
         <div class="tt-head">
+          ${weaponThumb(opportunity.imageName, opportunity.weaponName, "md")}
           <span class="tier-badge tier-${tier}">${tier}</span>
           <strong>${escapeHtml(opportunity.weaponName)}</strong>
         </div>
@@ -393,7 +397,9 @@ function renderWeaponResults(items) {
     li.className = "weapon-row" + (item.hasData ? " has-data" : "");
     const stats = item.summary?.priceStats;
     const priceLine = stats ? `median ${stats.median}p · p75 ${stats.p75}p` : "no scan data yet";
+    const imageName = item.imageName ?? item.summary?.imageName;
     li.innerHTML = `
+      ${weaponThumb(imageName, item.name, "sm")}
       <div class="wr-main">
         <strong>${escapeHtml(item.name)}</strong>
         <div class="small">${escapeHtml(item.group)} · dispo ${item.disposition.toFixed(2)}</div>
@@ -488,6 +494,12 @@ function shortTime(value) {
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
+}
+
+function weaponThumb(imageName, alt, size = "sm") {
+  if (!imageName) return `<span class="weapon-thumb weapon-thumb-${size} weapon-thumb-blank" aria-hidden="true"></span>`;
+  const escaped = encodeURIComponent(imageName);
+  return `<img class="weapon-thumb weapon-thumb-${size}" loading="lazy" src="https://cdn.warframestat.us/img/${escaped}" alt="${escapeHtml(alt)}" onerror="this.classList.add('weapon-thumb-blank'); this.removeAttribute('src');" />`;
 }
 
 function sortedOpportunities(opportunities) {

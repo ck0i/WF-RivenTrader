@@ -93,6 +93,7 @@ export function analyzeMarket(
       onlineListings: directAuctions.filter((auction) => auction.owner.status === "ingame" || auction.owner.status === "online").length,
       priceStats: directPrices.length > 0 ? priceStats(directPrices) : null,
     };
+    if (weapon.imageName) summary.imageName = weapon.imageName;
     const lastScannedAt = scannedAtByWeapon.get(weapon.slug);
     if (lastScannedAt) summary.lastScannedAt = lastScannedAt;
     weaponSummaries.push(summary);
@@ -124,10 +125,12 @@ export function analyzeMarket(
       const confidence = confidenceScore(auction, comparables.length, groupType, weapon);
       const statScore = statDemandMultiplier(auction.attributes);
       const score = normalizedOpportunityScore(expectedProfit, roi, confidence, comparables.length, statScore);
+      const referenceWeapon = weaponBySlug.get(weapon.slug) ?? weapon;
       const opportunity: Opportunity = {
         auctionId: auction.id,
         weaponSlug: weapon.slug,
-        weaponName: weaponBySlug.get(weapon.slug)?.name ?? weapon.name,
+        weaponName: referenceWeapon.name,
+        ...(referenceWeapon.imageName ? { imageName: referenceWeapon.imageName } : {}),
         rivenName: auction.name,
         buyPrice: auction.buyoutPrice,
         targetSellPrice,

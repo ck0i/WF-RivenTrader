@@ -218,6 +218,7 @@ function listWeapons(service: RivenTraderService, url: URL): Array<Record<string
       disposition: weapon.disposition,
       hasData: Boolean(summary),
       summary: summary ?? null,
+      ...(weapon.imageName ? { imageName: weapon.imageName } : {}),
       auctionsUrl: `https://warframe.market/auctions/search?type=riven&weapon_url_name=${encodeURIComponent(weapon.slug)}&sort_by=price_asc`,
     };
   });

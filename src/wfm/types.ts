@@ -10,6 +10,7 @@ export interface RivenWeapon {
   reqMasteryRank: number;
   icon?: string;
   thumb?: string;
+  imageName?: string;
 }
 
 export interface RivenAttribute {
@@ -82,12 +83,14 @@ export interface WeaponSummary {
   onlineListings: number;
   priceStats: PriceStats | null;
   lastScannedAt?: string;
+  imageName?: string;
 }
 
 export interface Opportunity {
   auctionId: string;
   weaponSlug: string;
   weaponName: string;
+  imageName?: string;
   rivenName: string;
   buyPrice: number;
   targetSellPrice: number;

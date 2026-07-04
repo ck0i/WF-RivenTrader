@@ -68,7 +68,7 @@ button:disabled { opacity: .55; cursor: wait; }
 canvas { width: 100%; height: 100%; display: block; }
 .chart-tip { position: absolute; pointer-events: none; background: rgba(8,13,19,.96); border: 1px solid rgba(113,246,197,.4); border-radius: 12px; padding: 10px 12px; font-size: 12px; color: var(--text); box-shadow: 0 12px 30px rgba(0,0,0,.55); z-index: 10; max-width: 260px; }
 .chart-tip[hidden] { display: none; }
-.chart-tip .tt-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.chart-tip .tt-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
 .chart-tip .tt-body > * { margin-bottom: 4px; line-height: 1.4; }
 .chart-tip .tt-hint { color: var(--muted); font-style: italic; margin-top: 4px; }
 .chart-tip .signals { margin-top: 4px; }
@@ -101,6 +101,19 @@ tbody tr:hover { background: rgba(125,180,255,.08); }
 .weapon-card dt { color: var(--muted); }
 .weapon-card dd { margin: 0; text-align: right; }
 footer { color: var(--muted); padding: 26px 0 42px; font-size: 12px; }
+
+/* Weapon thumbnails (warframestat.us CDN) */
+.weapon-thumb { display: inline-block; border-radius: 8px; object-fit: contain; background: #0c141d; border: 1px solid var(--border); flex-shrink: 0; }
+.weapon-thumb-sm { width: 34px; height: 34px; padding: 3px; }
+.weapon-thumb-md { width: 44px; height: 44px; padding: 4px; }
+.weapon-thumb-lg { width: 56px; height: 56px; padding: 5px; }
+.weapon-thumb-blank { background: repeating-linear-gradient(45deg, #10192480 0 6px, #16212f80 6px 12px); }
+.weapon-cell { display: flex; gap: 10px; align-items: center; }
+.weapon-cell > div { min-width: 0; }
+.weapon-card-head { display: flex; gap: 12px; align-items: center; margin-bottom: 10px; }
+.weapon-card-head h3 { margin: 0; font-size: 15px; }
+.instant-head-main { display: flex; gap: 10px; align-items: center; min-width: 0; }
+.instant-head-main > div { min-width: 0; }
 
 /* Tier badges + row highlight */
 .tier-badge { display: inline-block; font-weight: 800; font-size: 11px; padding: 2px 8px; border-radius: 999px; margin-right: 6px; background: rgba(38,56,75,.5); border: 1px solid var(--border); color: var(--muted); }
@@ -156,7 +169,8 @@ tbody tr.tier-D { box-shadow: inset 3px 0 0 rgba(255,122,144,.4); }
 .search-input:focus { border-color: var(--accent-2); }
 .weapon-results { max-height: 320px; overflow-y: auto; border: 1px solid var(--border); border-radius: 12px; background: #0a121a; }
 .weapon-list { list-style: none; margin: 0; padding: 4px; display: flex; flex-direction: column; gap: 3px; }
-.weapon-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; padding: 8px 10px; border-radius: 10px; cursor: pointer; background: transparent; }
+.weapon-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; cursor: pointer; background: transparent; }
+.weapon-row .wr-main { flex: 1 1 auto; min-width: 0; }
 .weapon-row:hover { background: rgba(125,180,255,.08); }
 .weapon-row.has-data { box-shadow: inset 2px 0 0 var(--accent); }
 .weapon-row .wr-main strong { color: var(--text); font-size: 13px; }

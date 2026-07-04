@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { WarframeMarketClient } from "../src/wfm/client.js";
 import { attributeSignature, analyzeMarket, DEFAULT_CONFIG, normalizeConfig } from "../src/wfm/opportunities.js";
 import type { DashboardState, Opportunity, RivenAuction, RivenWeapon, ReferenceSnapshot, ScanStatus } from "../src/wfm/types.js";
+import { enrichWeaponsWithImageNames, fetchWarframestatImageMap } from "../src/wfm/warframestat.js";
 
 type Tier = "hot" | "cold" | "reference";
 
@@ -98,6 +99,14 @@ async function runVersionCheck(args: Args, client: WarframeMarketClient): Promis
 
   if (!referenceChanged) {
     console.log(`Riven versions unchanged (${currentHash || "unknown"}); no reference refresh needed.`);
+    if (cached && cached.rivenWeapons.some((weapon) => !weapon.imageName)) {
+      const imageMap = await fetchWarframestatImageMap(args.userAgent);
+      const matched = enrichWeaponsWithImageNames(cached.rivenWeapons, imageMap);
+      if (matched > 0) {
+        await writeFile(cachedPath, JSON.stringify(cached, null, 2));
+        console.log(`Backfilled ${matched} warframestat imageNames into cached reference.`);
+      }
+    }
     await updateIndex(args.dataDir, {
       hot: { last_run_at: new Date().toISOString(), version_hash: currentHash, reference_changed: false },
     });

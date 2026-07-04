@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { compact, isRecord, readArray, readBooleanWithDefault, readNullableNumber, readNumberWithDefault, readRecord, readString, readStringWithDefault } from "./guards.js";
 import { delay, TokenBucket } from "./rateLimit.js";
 import type { AuctionAttribute, AuctionOwner, ReferenceSnapshot, RivenAttribute, RivenAuction, RivenWeapon, SellerStatus } from "./types.js";
+import { enrichWeaponsWithImageNames, fetchWarframestatImageMap } from "./warframestat.js";
 
 type Fetcher = (input: URL, init: RequestInit) => Promise<Response>;
 
@@ -78,6 +79,13 @@ export class WarframeMarketClient {
     if (rivenWeapons.length === 0 || rivenAttributes.length === 0) {
       if (cached && isUsableReferenceCache(cached)) return cached;
       throw new Error("refusing to overwrite reference cache with empty Warframe.market riven reference payloads");
+    }
+
+    try {
+      const imageMap = await fetchWarframestatImageMap(this.headers["User-Agent"] ?? "wf-riventrader/0.1");
+      enrichWeaponsWithImageNames(rivenWeapons, imageMap);
+    } catch {
+      // non-fatal — reference works without images
     }
 
     const snapshot: ReferenceSnapshot = {
@@ -243,8 +251,10 @@ function parseRivenWeapon(value: unknown): RivenWeapon | null {
   };
   const icon = readString(value, "icon") ?? (en ? readString(en, "icon") : undefined);
   const thumb = readString(value, "thumb") ?? (en ? readString(en, "thumb") : undefined);
+  const imageName = readString(value, "imageName");
   if (icon) weapon.icon = icon;
   if (thumb) weapon.thumb = thumb;
+  if (imageName) weapon.imageName = imageName;
   return weapon;
 }
 
