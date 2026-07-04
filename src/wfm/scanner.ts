@@ -1,6 +1,10 @@
 import { WarframeMarketClient } from "./client.js";
-import { analyzeMarket, DEFAULT_CONFIG, normalizeConfig, slugify } from "./opportunities.js";
+import type { PriceHistoryStore, SignatureValuation as SignatureValuationResult, SignatureVelocity as SignatureVelocityResult } from "./history.js";
+import { analyzeMarket, DEFAULT_CONFIG, normalizeConfig, slugify, type MarketAnalysis } from "./opportunities.js";
 import type { DashboardState, ReferenceSnapshot, RivenAuction, RivenWeapon, ScanStatus, TraderConfig } from "./types.js";
+
+export type ScanTier = "hot" | "cold" | "full";
+export type ScanMode = "tiered" | "full";
 
 export interface ScannerOptions {
   client: WarframeMarketClient;
@@ -8,19 +12,34 @@ export interface ScannerOptions {
   refreshMs?: number;
   concurrency?: number;
   weaponLimit?: number | null;
+  scanMode?: ScanMode;
+  hotSize?: number;
+  coldSliceSize?: number;
+  hotIntervalMs?: number;
+  coldIntervalMs?: number;
+  emitDebounceMs?: number;
+  history?: PriceHistoryStore;
 }
 
 type StateListener = (state: DashboardState) => void;
 
+const HOT_SCORE_MIN_HOURS_BETWEEN_RESCANS = 3;
+
 export class RivenTraderService {
   private readonly client: WarframeMarketClient;
+  private readonly history: PriceHistoryStore | undefined;
   private readonly listeners = new Set<StateListener>();
   private readonly auctionsByWeapon = new Map<string, RivenAuction[]>();
   private readonly scannedAtByWeapon = new Map<string, string>();
   private reference: ReferenceSnapshot | null = null;
   private config: TraderConfig;
-  private refreshTimer: NodeJS.Timeout | undefined;
+  private timers: NodeJS.Timeout[] = [];
+  private emitTimer: NodeJS.Timeout | undefined;
   private activeRefresh: Promise<void> | null = null;
+  private cachedAnalysis: { key: string; analysis: MarketAnalysis } | null = null;
+  private auctionsRevision = 0;
+  private configRevision = 0;
+  private coldCursor = 0;
   private status: ScanStatus = {
     initialized: false,
     running: false,
@@ -33,13 +52,41 @@ export class RivenTraderService {
   readonly refreshMs: number;
   readonly concurrency: number;
   readonly weaponLimit: number | null;
+  readonly scanMode: ScanMode;
+  readonly hotSize: number;
+  readonly coldSliceSize: number;
+  readonly hotIntervalMs: number;
+  readonly coldIntervalMs: number;
+  readonly emitDebounceMs: number;
 
   constructor(options: ScannerOptions) {
     this.client = options.client;
+    this.history = options.history;
     this.config = normalizeConfig(options.config ?? DEFAULT_CONFIG);
     this.refreshMs = Math.max(60_000, options.refreshMs ?? 60_000);
     this.concurrency = Math.max(1, Math.floor(options.concurrency ?? 4));
     this.weaponLimit = options.weaponLimit === undefined ? null : options.weaponLimit;
+    this.scanMode = options.scanMode ?? "tiered";
+    this.hotSize = Math.max(1, Math.floor(options.hotSize ?? 40));
+    this.coldSliceSize = Math.max(1, Math.floor(options.coldSliceSize ?? 150));
+    this.hotIntervalMs = Math.max(60_000, options.hotIntervalMs ?? 5 * 60_000);
+    this.coldIntervalMs = Math.max(this.hotIntervalMs, options.coldIntervalMs ?? 60 * 60_000);
+    this.emitDebounceMs = Math.max(100, options.emitDebounceMs ?? 1500);
+    this.hydrateFromHistory();
+  }
+
+  private hydrateFromHistory(): void {
+    if (!this.history) return;
+    const snapshot = this.history.warmStart();
+    if (snapshot.restoredWeaponCount === 0) return;
+    for (const [slug, auctions] of snapshot.auctionsByWeapon) this.auctionsByWeapon.set(slug, auctions);
+    for (const [slug, scannedAt] of snapshot.scannedAtByWeapon) this.scannedAtByWeapon.set(slug, scannedAt);
+    this.auctionsRevision += 1;
+    const latestIso = snapshot.latestSnapshotTs !== null ? new Date(snapshot.latestSnapshotTs * 1000).toISOString() : undefined;
+    this.status = {
+      ...this.status,
+      lastMessage: `Warm-started ${snapshot.restoredWeaponCount} weapons from history (${latestIso ?? "unknown time"})`,
+    };
   }
 
   subscribe(listener: StateListener): () => void {
@@ -51,36 +98,50 @@ export class RivenTraderService {
   }
 
   start(): void {
-    if (!this.refreshTimer) {
-      this.status.nextRefreshAt = new Date(Date.now() + this.refreshMs).toISOString();
-      this.refreshTimer = setInterval(() => {
-        this.status.nextRefreshAt = new Date(Date.now() + this.refreshMs).toISOString();
-        void this.refresh("scheduled");
-      }, this.refreshMs);
+    if (this.timers.length > 0) return;
+    if (this.scanMode === "tiered") {
+      this.scheduleNextRefreshAt();
+      this.timers.push(setInterval(() => {
+        this.scheduleNextRefreshAt();
+        void this.refresh("hot-scheduled", "hot");
+      }, this.hotIntervalMs));
+      this.timers.push(setInterval(() => {
+        void this.refresh("cold-scheduled", "cold");
+      }, this.coldIntervalMs));
+      void this.refresh("startup-hot", "hot");
+    } else {
+      this.scheduleNextRefreshAt();
+      this.timers.push(setInterval(() => {
+        this.scheduleNextRefreshAt();
+        void this.refresh("scheduled", "full");
+      }, this.refreshMs));
+      void this.refresh("startup", "full");
     }
-    void this.refresh("startup");
   }
 
   stop(): void {
-    if (this.refreshTimer) {
-      clearInterval(this.refreshTimer);
-      this.refreshTimer = undefined;
+    for (const timer of this.timers) clearInterval(timer);
+    this.timers = [];
+    if (this.emitTimer) {
+      clearTimeout(this.emitTimer);
+      this.emitTimer = undefined;
     }
   }
 
   updateConfig(update: Partial<TraderConfig>): TraderConfig {
     this.config = normalizeConfig({ ...this.config, ...update });
-    this.emitState();
+    this.configRevision += 1;
+    this.emitStateImmediate();
     return this.config;
   }
 
-  async refresh(reason: string): Promise<void> {
+  async refresh(reason: string, tier: ScanTier = "full"): Promise<void> {
     if (this.activeRefresh) {
       this.status.lastMessage = `Skipped overlapping ${reason} refresh; current ${this.status.reason} scan is still running`;
-      this.emitState();
+      this.emitStateImmediate();
       return this.activeRefresh;
     }
-    this.activeRefresh = this.runRefresh(reason);
+    this.activeRefresh = this.runRefresh(reason, tier);
     try {
       await this.activeRefresh;
     } finally {
@@ -88,9 +149,49 @@ export class RivenTraderService {
     }
   }
 
+  getSignatureValuation(weaponSlug: string, signature: string, windowDays: number = 30): SignatureValuationResult | null {
+    if (!this.history) return null;
+    try {
+      return this.history.signatureValuation(weaponSlug, signature, windowDays);
+    } catch {
+      return null;
+    }
+  }
+
+  getSignatureVelocity(weaponSlug: string, signature: string, windowDays: number = 30): SignatureVelocityResult | null {
+    if (!this.history) return null;
+    try {
+      return this.history.signatureVelocity(weaponSlug, signature, windowDays);
+    } catch {
+      return null;
+    }
+  }
+
+  getAllWeapons(): RivenWeapon[] {
+    return this.reference?.rivenWeapons ?? [];
+  }
+
+  getDispositionSignals(sinceSeconds: number = 30 * 24 * 60 * 60): Map<string, "rising" | "falling"> {
+    const map = new Map<string, "rising" | "falling">();
+    if (!this.history) return map;
+    const cutoff = Math.floor(Date.now() / 1000) - sinceSeconds;
+    try {
+      const rows = this.history.recentDispositionChanges(cutoff);
+      for (const row of rows) map.set(row.weapon_slug, row.delta > 0 ? "rising" : "falling");
+    } catch {
+      // history query failure is non-fatal
+    }
+    return map;
+  }
+
   getState(): DashboardState {
     const weapons = this.reference?.rivenWeapons ?? [];
-    const analysis = analyzeMarket(weapons, this.auctionsByWeapon, this.config, this.scannedAtByWeapon);
+    const key = this.analysisKey();
+    let analysis = this.cachedAnalysis && this.cachedAnalysis.key === key ? this.cachedAnalysis.analysis : null;
+    if (!analysis) {
+      analysis = analyzeMarket(weapons, this.auctionsByWeapon, this.config, this.scannedAtByWeapon);
+      this.cachedAnalysis = { key, analysis };
+    }
     let auctionCount = 0;
     for (const auctions of this.auctionsByWeapon.values()) auctionCount += auctions.length;
     const reference: DashboardState["reference"] = {
@@ -100,7 +201,7 @@ export class RivenTraderService {
     if (this.reference?.versionsUpdatedAt) reference.versionsUpdatedAt = this.reference.versionsUpdatedAt;
     return {
       generatedAt: new Date().toISOString(),
-      refreshMs: this.refreshMs,
+      refreshMs: this.scanMode === "tiered" ? this.hotIntervalMs : this.refreshMs,
       apiBase: this.client.baseUrl,
       config: this.config,
       status: { ...this.status },
@@ -115,7 +216,16 @@ export class RivenTraderService {
     };
   }
 
-  private async runRefresh(reason: string): Promise<void> {
+  private analysisKey(): string {
+    return `${this.auctionsRevision}|${this.configRevision}`;
+  }
+
+  private scheduleNextRefreshAt(): void {
+    const next = this.scanMode === "tiered" ? this.hotIntervalMs : this.refreshMs;
+    this.status.nextRefreshAt = new Date(Date.now() + next).toISOString();
+  }
+
+  private async runRefresh(reason: string, tier: ScanTier): Promise<void> {
     const startedAt = new Date().toISOString();
     this.status = {
       initialized: this.status.initialized,
@@ -126,50 +236,76 @@ export class RivenTraderService {
       totalWeapons: 0,
       lastMessage: "Loading Warframe.market reference data",
     };
-    this.emitState();
+    this.emitStateImmediate();
 
     try {
       if (!this.reference) {
         this.reference = await this.client.loadReference();
         this.status.initialized = true;
+        this.auctionsRevision += 1;
       }
 
-      const targets = this.scanTargets(this.reference.rivenWeapons);
+      const targets = this.scanTargets(this.reference.rivenWeapons, tier);
       this.status.totalWeapons = targets.length;
-      this.status.lastMessage = targets.length === 0 ? "No weapons matched the current watchlist" : `Scanning ${targets.length} riven weapon auction books`;
-      this.emitState();
+      const tierLabel = this.scanMode === "tiered" && tier !== "full" ? ` (${tier})` : "";
+      this.status.lastMessage = targets.length === 0
+        ? `No weapons matched the current watchlist${tierLabel}`
+        : `Scanning ${targets.length} riven weapon auction books${tierLabel}`;
+      this.emitStateImmediate();
 
+      const scannedThisCycle: string[] = [];
       await this.runWithConcurrency(targets, async (weapon) => {
-        this.status.lastMessage = `Scanning ${weapon.name}`;
+        this.status.lastMessage = `Scanning ${weapon.name}${tierLabel}`;
         const auctions = await this.client.searchRivenAuctions(weapon.slug);
         this.auctionsByWeapon.set(weapon.slug, auctions);
         this.scannedAtByWeapon.set(weapon.slug, new Date().toISOString());
         this.status.scannedWeapons += 1;
-        this.emitState();
+        this.auctionsRevision += 1;
+        scannedThisCycle.push(weapon.slug);
+        this.emitStateDebounced();
       });
+
+      this.persistScan(scannedThisCycle);
 
       this.status.running = false;
       this.status.finishedAt = new Date().toISOString();
-      this.status.nextRefreshAt = new Date(Date.now() + this.refreshMs).toISOString();
+      this.scheduleNextRefreshAt();
       this.status.lastMessage = `Finished ${reason} scan: ${this.status.scannedWeapons}/${this.status.totalWeapons} weapon books refreshed`;
-      this.emitState();
+      this.emitStateImmediate();
     } catch (error) {
       this.status.running = false;
       this.status.finishedAt = new Date().toISOString();
       this.status.lastError = error instanceof Error ? error.message : String(error);
       this.status.lastMessage = `Refresh failed: ${this.status.lastError}`;
-      this.emitState();
+      this.emitStateImmediate();
     }
   }
 
-  private scanTargets(weapons: RivenWeapon[]): RivenWeapon[] {
+  private persistScan(scannedSlugs: string[]): void {
+    if (!this.history || scannedSlugs.length === 0 || !this.reference) return;
+    const dispositionBySlug = new Map<string, number>();
+    for (const weapon of this.reference.rivenWeapons) dispositionBySlug.set(weapon.slug, weapon.disposition);
+    try {
+      this.history.writeScan({
+        tsSeconds: Math.floor(Date.now() / 1000),
+        scannedSlugs,
+        auctionsByWeapon: this.auctionsByWeapon,
+        dispositionBySlug,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.status.lastError = `history write failed: ${message}`;
+    }
+  }
+
+  private scanTargets(weapons: RivenWeapon[], tier: ScanTier): RivenWeapon[] {
     const requested = this.config.watchlist.map(slugify);
-    let selected: RivenWeapon[];
+    let candidates: RivenWeapon[];
     if (requested.length === 0) {
-      selected = this.config.scanAllWhenWatchlistEmpty ? weapons : [];
+      candidates = this.config.scanAllWhenWatchlistEmpty ? weapons : [];
     } else {
       const requestedSet = new Set(requested);
-      selected = weapons.filter((weapon) => {
+      candidates = weapons.filter((weapon) => {
         const nameSlug = slugify(weapon.name);
         for (const request of requestedSet) {
           if (weapon.slug === request || nameSlug === request || weapon.slug.includes(request) || nameSlug.includes(request)) return true;
@@ -177,8 +313,50 @@ export class RivenTraderService {
         return false;
       });
     }
-    if (this.weaponLimit !== null && this.weaponLimit > 0) return selected.slice(0, this.weaponLimit);
-    return selected;
+    if (this.weaponLimit !== null && this.weaponLimit > 0) candidates = candidates.slice(0, this.weaponLimit);
+    if (this.scanMode !== "tiered" || tier === "full") return candidates;
+    if (requested.length > 0) return candidates;
+    return tier === "hot" ? this.pickHot(candidates) : this.pickCold(candidates);
+  }
+
+  private pickHot(pool: RivenWeapon[]): RivenWeapon[] {
+    if (pool.length === 0) return [];
+    const oppSlugs = new Set(
+      (this.cachedAnalysis?.analysis.opportunities ?? []).map((opportunity) => opportunity.weaponSlug),
+    );
+    const now = Date.now();
+    const rescanThresholdMs = HOT_SCORE_MIN_HOURS_BETWEEN_RESCANS * 60 * 60_000;
+    const scored = pool.map((weapon) => {
+      let score = 0;
+      if (oppSlugs.has(weapon.slug)) score += 10;
+      const listings = this.auctionsByWeapon.get(weapon.slug)?.length ?? 0;
+      if (listings > 0) score += Math.min(2, Math.log2(listings + 1) / 4);
+      const lastScan = this.scannedAtByWeapon.get(weapon.slug);
+      if (!lastScan) score += 1.5;
+      else {
+        const ageMs = now - Date.parse(lastScan);
+        if (Number.isFinite(ageMs) && ageMs > rescanThresholdMs) score += 0.5;
+      }
+      return { weapon, score };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, Math.min(this.hotSize, scored.length)).map((entry) => entry.weapon);
+  }
+
+  private pickCold(pool: RivenWeapon[]): RivenWeapon[] {
+    if (pool.length === 0) return [];
+    const hotSet = new Set(this.pickHot(pool).map((weapon) => weapon.slug));
+    const cold = pool.filter((weapon) => !hotSet.has(weapon.slug));
+    if (cold.length === 0) return [];
+    const size = Math.min(this.coldSliceSize, cold.length);
+    const start = ((this.coldCursor % cold.length) + cold.length) % cold.length;
+    const slice: RivenWeapon[] = [];
+    for (let i = 0; i < size; i += 1) {
+      const item = cold[(start + i) % cold.length];
+      if (item !== undefined) slice.push(item);
+    }
+    this.coldCursor = (start + size) % cold.length;
+    return slice;
   }
 
   private async runWithConcurrency<T>(items: T[], worker: (item: T) => Promise<void>): Promise<void> {
@@ -194,7 +372,23 @@ export class RivenTraderService {
     await Promise.all(workers);
   }
 
-  private emitState(): void {
+  private emitStateImmediate(): void {
+    if (this.emitTimer) {
+      clearTimeout(this.emitTimer);
+      this.emitTimer = undefined;
+    }
+    this.deliverState();
+  }
+
+  private emitStateDebounced(): void {
+    if (this.emitTimer) return;
+    this.emitTimer = setTimeout(() => {
+      this.emitTimer = undefined;
+      this.deliverState();
+    }, this.emitDebounceMs);
+  }
+
+  private deliverState(): void {
     const state = this.getState();
     for (const listener of this.listeners) listener(state);
   }

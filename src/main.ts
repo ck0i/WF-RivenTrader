@@ -5,7 +5,8 @@ import { resolve } from "node:path";
 import { createAppServer } from "./server.js";
 import { WarframeMarketClient } from "./wfm/client.js";
 import { DEFAULT_CONFIG } from "./wfm/opportunities.js";
-import { RivenTraderService } from "./wfm/scanner.js";
+import { PriceHistoryStore } from "./wfm/history.js";
+import { RivenTraderService, type ScanMode } from "./wfm/scanner.js";
 import type { TraderConfig } from "./wfm/types.js";
 
 interface LaunchConfig {
@@ -17,6 +18,15 @@ interface LaunchConfig {
   concurrency: number;
   ratePerSecond: number;
   burst: number;
+  scanMode: ScanMode;
+  hotSize: number;
+  coldSliceSize: number;
+  hotIntervalMs: number;
+  coldIntervalMs: number;
+  emitDebounceMs: number;
+  historyEnabled: boolean;
+  historyDbPath: string;
+  remoteDataUrl: string | undefined;
   traderConfig: Partial<TraderConfig>;
 }
 
@@ -26,25 +36,43 @@ export async function main(): Promise<void> {
     ratePerSecond: launch.ratePerSecond,
     burst: launch.burst,
   });
+  let history: PriceHistoryStore | undefined;
+  if (launch.historyEnabled) {
+    try {
+      history = new PriceHistoryStore(launch.historyDbPath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`History store disabled — could not open ${launch.historyDbPath}: ${message}`);
+    }
+  }
   const service = new RivenTraderService({
     client,
     config: launch.traderConfig,
     refreshMs: launch.refreshMs,
     concurrency: launch.concurrency,
     weaponLimit: launch.weaponLimit,
+    scanMode: launch.scanMode,
+    hotSize: launch.hotSize,
+    coldSliceSize: launch.coldSliceSize,
+    hotIntervalMs: launch.hotIntervalMs,
+    coldIntervalMs: launch.coldIntervalMs,
+    emitDebounceMs: launch.emitDebounceMs,
+    ...(history ? { history } : {}),
   });
-  const server = createAppServer(service);
+  const server = createAppServer(service, launch.remoteDataUrl ? { remoteFallback: { url: launch.remoteDataUrl } } : {});
   await listen(server, launch.port, launch.host);
   const url = `http://${launch.host}:${launch.port}`;
   console.log(`WF-RivenTrader dashboard: ${url}`);
   console.log(`MCP SSE endpoint: ${url}/mcp/sse`);
   console.log(`Dashboard SSE endpoint: ${url}/events`);
+  console.log(`Scan mode: ${launch.scanMode}${history ? ` · history: ${launch.historyDbPath}` : " · history: disabled"}`);
   console.log("Warframe.market fetches are server-side, cached, and token-bucket rate-limited.");
   service.start();
   if (launch.openBrowser) openBrowser(url);
 
   const shutdown = () => {
     service.stop();
+    history?.close();
     server.close();
   };
   process.once("SIGINT", shutdown);
@@ -74,6 +102,14 @@ export function readLaunchConfig(args: string[], env: NodeJS.ProcessEnv): Launch
   if (minBuy !== undefined) traderConfig.minBuyPrice = minBuy;
   if (maxSell !== undefined) traderConfig.maxSellPrice = maxSell;
 
+  const scanModeRaw = (env.WFM_SCAN_MODE ?? "tiered").trim().toLowerCase();
+  const scanMode: ScanMode = scanModeRaw === "full" ? "full" : "tiered";
+  const historyEnabled = env.WFM_HISTORY_ENABLED !== "0" && env.WFM_HISTORY !== "0";
+  const historyDbPath = (env.WFM_HISTORY_DB ?? ".cache/wf-riventrader/history.db").trim();
+  const remoteDataUrl = env.WFM_DATA_URL === "off" || env.WFM_DATA_URL === ""
+    ? undefined
+    : env.WFM_DATA_URL ?? "https://raw.githubusercontent.com/ck0i/WF-RivenTrader/data/data/latest/state.json";
+
   return {
     host,
     port,
@@ -83,6 +119,15 @@ export function readLaunchConfig(args: string[], env: NodeJS.ProcessEnv): Launch
     concurrency: readNumberEnv(env, "WFM_CONCURRENCY", 4),
     ratePerSecond: readNumberEnv(env, "WFM_RATE_PER_SEC", 3),
     burst: readNumberEnv(env, "WFM_BURST", 20),
+    scanMode,
+    hotSize: readNumberEnv(env, "WFM_HOT_SIZE", 40),
+    coldSliceSize: readNumberEnv(env, "WFM_COLD_SLICE_SIZE", 150),
+    hotIntervalMs: readNumberEnv(env, "WFM_HOT_INTERVAL_MS", 5 * 60_000),
+    coldIntervalMs: readNumberEnv(env, "WFM_COLD_INTERVAL_MS", 60 * 60_000),
+    emitDebounceMs: readNumberEnv(env, "WFM_EMIT_DEBOUNCE_MS", 1500),
+    historyEnabled,
+    historyDbPath,
+    remoteDataUrl,
     traderConfig,
   };
 }
