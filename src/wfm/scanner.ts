@@ -132,12 +132,18 @@ export class RivenTraderService {
 
   setMode(next: ScanMode): ScanMode {
     if (next === this.mode) return this.mode;
-    if (next === "remote" && !this.remoteDataUrl) throw new Error("remote mode requires a data URL");
+    if (next === "remote" && !this.remoteUrl("state")) throw new Error("remote mode requires WFM_DATA_URL or WFM_DATA_BASE to be set");
     this.stop();
     this.activeRefresh = null;
     this.scanGeneration += 1;
     this.mode = next;
     this.remoteState = null;
+    this.remoteReference = null;
+    this.remoteValuations.clear();
+    this.remoteVelocities.clear();
+    this.lastRemoteFetchAt = 0;
+    this.lastRemoteReferenceFetchAt = 0;
+    this.lastRemoteValuationsFetchAt = 0;
     this.status = {
       ...this.status,
       running: false,
