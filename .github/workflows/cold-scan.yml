@@ -49,7 +49,7 @@ jobs:
 
       - name: Run cold scan
         env:
-          WFM_USER_AGENT: "wf-riventrader-ci/0.1 (+https://github.com/${{ github.repository }})"
+          WFM_USER_AGENT: "the-plat-exchange-ci/0.1 (+https://github.com/${{ github.repository }})"
           WFM_CACHE_DIR: /tmp/wfm-cache
           WFM_RATE_PER_SEC: "2"
         run: npx tsx scripts/scan-and-write.ts --tier cold --data-dir data-tree/data

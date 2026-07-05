@@ -49,7 +49,7 @@ jobs:
 
       - name: Fetch sentiment
         env:
-          WFM_SENTIMENT_UA: "wf-riventrader-sentiment/0.1 (+https://github.com/${{ github.repository }})"
+          WFM_SENTIMENT_UA: "the-plat-exchange-sentiment/0.1 (+https://github.com/${{ github.repository }})"
           WFM_CACHE_DIR: /tmp/wfm-cache
         run: npx tsx scripts/sentiment-fetch.ts --data-dir data-tree/data
 

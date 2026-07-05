@@ -7,7 +7,7 @@ import { McpSseServer } from "./mcp.js";
 import { enrichOpportunity, type SignatureLookupHit } from "./mcp/schemas.js";
 import { attributeSignature } from "./wfm/opportunities.js";
 import { isRecord, readBoolean, readNumber, readString } from "./wfm/guards.js";
-import type { RivenTraderService } from "./wfm/scanner.js";
+import type { ThePlatExchangeService } from "./wfm/scanner.js";
 import type { DashboardState, Opportunity, SellerStatus, TraderConfig } from "./wfm/types.js";
 
 export interface AppServerOptions {
@@ -131,11 +131,11 @@ const CONTENT_TYPES: Record<string, string> = {
   ".svg": "image/svg+xml",
 };
 
-export function createAppServer(service: RivenTraderService, options: AppServerOptions = {}): Server {
+export function createAppServer(service: ThePlatExchangeService, options: AppServerOptions = {}): Server {
   const publicDir = options.publicDir ?? join(process.cwd(), "public");
   const mcp = new McpSseServer(service);
   const remote = options.remoteFallback ? new RemoteFallback(options.remoteFallback) : null;
-  const imageCacheDir = options.imageCacheDir ?? join(process.cwd(), ".cache", "wf-riventrader", "images");
+  const imageCacheDir = options.imageCacheDir ?? join(process.cwd(), ".cache", "the-plat-exchange", "images");
   const imageProxy = new ImageProxy(imageCacheDir);
 
   return createServer(async (request, response) => {
@@ -201,7 +201,7 @@ export function createAppServer(service: RivenTraderService, options: AppServerO
           endpoint: "/mcp/sse",
           messages_endpoint: "/mcp/messages",
           transport: "sse",
-          server: { name: "wf-riventrader", version: "0.1.0" },
+          server: { name: "the-plat-exchange", version: "0.1.0" },
           tools: mcp.describeTools(),
         });
         return;
@@ -247,7 +247,7 @@ export function createAppServer(service: RivenTraderService, options: AppServerO
   });
 }
 
-function buildEnrichmentContext(service: RivenTraderService): { dispositionSignals: Map<string, "rising" | "falling">; signatureLookup: (slug: string, signature: string) => SignatureLookupHit } {
+function buildEnrichmentContext(service: ThePlatExchangeService): { dispositionSignals: Map<string, "rising" | "falling">; signatureLookup: (slug: string, signature: string) => SignatureLookupHit } {
   const dispositionSignals = service.getDispositionSignals();
   const signatureLookup = (weaponSlug: string, signature: string): SignatureLookupHit => {
     const valuation = service.getSignatureValuation(weaponSlug, signature);
@@ -260,7 +260,7 @@ function buildEnrichmentContext(service: RivenTraderService): { dispositionSigna
   return { dispositionSignals, signatureLookup };
 }
 
-function computeInstantWins(service: RivenTraderService, url: URL): Array<{ opportunity: unknown; signature_value: unknown; expected_uplift: number }> {
+function computeInstantWins(service: ThePlatExchangeService, url: URL): Array<{ opportunity: unknown; signature_value: unknown; expected_uplift: number }> {
   const limit = Math.max(1, Math.floor(Number(url.searchParams.get("limit") ?? 25)));
   const minConfidence = Number(url.searchParams.get("minConfidence") ?? url.searchParams.get("min_confidence") ?? 0.6);
   const state = service.getState();
@@ -284,7 +284,7 @@ function computeInstantWins(service: RivenTraderService, url: URL): Array<{ oppo
   return hits.slice(0, limit);
 }
 
-function listWeapons(service: RivenTraderService, url: URL): Array<Record<string, unknown>> {
+function listWeapons(service: ThePlatExchangeService, url: URL): Array<Record<string, unknown>> {
   const query = (url.searchParams.get("q") ?? "").trim().toLowerCase();
   const limit = Math.max(1, Math.min(500, Math.floor(Number(url.searchParams.get("limit") ?? 60))));
   const weapons = service.getAllWeapons();
@@ -314,7 +314,7 @@ function listWeapons(service: RivenTraderService, url: URL): Array<Record<string
   });
 }
 
-function computeWeaponDetail(service: RivenTraderService, slug: string): Record<string, unknown> | null {
+function computeWeaponDetail(service: ThePlatExchangeService, slug: string): Record<string, unknown> | null {
   const weapons = service.getAllWeapons();
   const weapon = weapons.find((entry) => entry.slug === slug);
   if (!weapon) return null;
@@ -335,7 +335,7 @@ function computeWeaponDetail(service: RivenTraderService, slug: string): Record<
   };
 }
 
-function computeSignatureValue(service: RivenTraderService, url: URL): Record<string, unknown> | null {
+function computeSignatureValue(service: ThePlatExchangeService, url: URL): Record<string, unknown> | null {
   const weaponSlug = url.searchParams.get("weapon_slug") ?? url.searchParams.get("weaponSlug");
   if (!weaponSlug) return null;
   const explicit = url.searchParams.get("signature");
@@ -354,7 +354,7 @@ function computeSignatureValue(service: RivenTraderService, url: URL): Record<st
   return { ...valuation, velocity };
 }
 
-function handleDashboardSse(request: IncomingMessage, response: ServerResponse, service: RivenTraderService): void {
+function handleDashboardSse(request: IncomingMessage, response: ServerResponse, service: ThePlatExchangeService): void {
   response.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform",

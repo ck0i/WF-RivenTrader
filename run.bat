@@ -1,9 +1,9 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title WF-RivenTrader
+title ThePlatExchange
 
-echo Starting WF-RivenTrader...
+echo Starting ThePlatExchange...
 
 where node >nul 2>nul
 if errorlevel 1 (

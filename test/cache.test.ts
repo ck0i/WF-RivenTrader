@@ -44,7 +44,7 @@ const attributesBody = {
   error: null,
 };
 
-const tempDir = await mkdtemp(join(tmpdir(), "wf-riventrader-cache-"));
+const tempDir = await mkdtemp(join(tmpdir(), "the-plat-exchange-cache-"));
 try {
   const calls: string[] = [];
   const fetcher = async (input: URL, _init: RequestInit) => {

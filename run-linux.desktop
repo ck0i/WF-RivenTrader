@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
-Name=WF-RivenTrader
-Comment=Install dependencies and run the WF-RivenTrader dashboard
+Name=ThePlatExchange
+Comment=Install dependencies and run ThePlatExchange
 Exec=sh -c "cd \"$(dirname \"$1\")\" && exec ./run.sh" sh %k
 Terminal=true
 Categories=Game;Utility;

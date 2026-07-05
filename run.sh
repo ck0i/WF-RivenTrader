@@ -11,7 +11,7 @@ pause_on_exit() {
   fi
 }
 
-echo "Starting WF-RivenTrader..."
+echo "Starting ThePlatExchange..."
 
 if ! command -v node >/dev/null 2>&1; then
   echo "Node.js 22 or newer is required, but node was not found."

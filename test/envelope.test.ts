@@ -62,7 +62,7 @@ assert.equal(envelope.version, ENVELOPE_VERSION);
 const validated = validateEnvelope(envelope);
 assert(validated.ok, "well-formed envelope must validate");
 
-const bad = { version: "riventrader/1" as const, data: {}, meta: { ...fresh, quality: "purple" as unknown as "red" } };
+const bad = { version: "the-plat-exchange/1" as const, data: {}, meta: { ...fresh, quality: "purple" as unknown as "red" } };
 const badResult = validateEnvelope(bad);
 assert(!badResult.ok, "invalid quality must fail validation");
 

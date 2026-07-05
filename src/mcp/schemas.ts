@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Opportunity } from "../wfm/types.js";
 
-export const ENVELOPE_VERSION = "riventrader/1" as const;
+export const ENVELOPE_VERSION = "the-plat-exchange/1" as const;
 
 const WARNING_CODES = [
   "stale_data",

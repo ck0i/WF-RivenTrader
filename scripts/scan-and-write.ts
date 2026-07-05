@@ -63,7 +63,7 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): Args {
     ratePerSecond: numberOr(env.WFM_RATE_PER_SEC, 2),
     burst: numberOr(env.WFM_BURST, 10),
     concurrency: numberOr(env.WFM_CONCURRENCY, 3),
-    userAgent: env.WFM_USER_AGENT ?? "wf-riventrader-ci/0.1 (+https://github.com/ck0i/WF-RivenTrader)",
+    userAgent: env.WFM_USER_AGENT ?? "the-plat-exchange-ci/0.1 (+https://github.com/ck0i/ThePlatExchange)",
     valuationWindowDays: numberOr(env.WFM_VALUATION_WINDOW_DAYS, 30),
     vanishThresholdDays: numberOr(env.WFM_VELOCITY_VANISH_DAYS, 3),
   };

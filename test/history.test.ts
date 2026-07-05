@@ -45,7 +45,7 @@ const attrs: AuctionAttribute[] = [
   { urlName: "zoom", value: -30, positive: false },
 ];
 
-const tempDir = await mkdtemp(join(tmpdir(), "wf-riventrader-history-"));
+const tempDir = await mkdtemp(join(tmpdir(), "the-plat-exchange-history-"));
 try {
   const dbPath = join(tempDir, "history.db");
   const store = new PriceHistoryStore(dbPath);

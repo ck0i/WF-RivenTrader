@@ -6,7 +6,7 @@ import { createAppServer } from "./server.js";
 import { WarframeMarketClient } from "./wfm/client.js";
 import { DEFAULT_CONFIG } from "./wfm/opportunities.js";
 import { PriceHistoryStore } from "./wfm/history.js";
-import { RivenTraderService, type ScanMode } from "./wfm/scanner.js";
+import { ThePlatExchangeService, type ScanMode } from "./wfm/scanner.js";
 import type { TraderConfig } from "./wfm/types.js";
 
 interface LaunchConfig {
@@ -46,7 +46,7 @@ export async function main(): Promise<void> {
       console.warn(`History store disabled — could not open ${launch.historyDbPath}: ${message}`);
     }
   }
-  const service = new RivenTraderService({
+  const service = new ThePlatExchangeService({
     client,
     config: launch.traderConfig,
     refreshMs: launch.refreshMs,
@@ -65,7 +65,7 @@ export async function main(): Promise<void> {
   const server = createAppServer(service, launch.remoteDataUrl ? { remoteFallback: { url: launch.remoteDataUrl } } : {});
   await listen(server, launch.port, launch.host);
   const url = `http://${launch.host}:${launch.port}`;
-  console.log(`WF-RivenTrader dashboard: ${url}`);
+  console.log(`ThePlatExchange dashboard: ${url}`);
   console.log(`MCP SSE endpoint: ${url}/mcp/sse`);
   console.log(`Dashboard SSE endpoint: ${url}/events`);
   console.log(`Scan mode: ${launch.scanMode}${history ? ` · history: ${launch.historyDbPath}` : " · history: disabled"}`);
@@ -108,13 +108,13 @@ export function readLaunchConfig(args: string[], env: NodeJS.ProcessEnv): Launch
   const scanModeRaw = (env.WFM_SCAN_MODE ?? "remote").trim().toLowerCase();
   const scanMode: ScanMode = scanModeRaw === "full" ? "full" : scanModeRaw === "tiered" ? "tiered" : scanModeRaw === "local" ? "tiered" : "remote";
   const historyEnabled = env.WFM_HISTORY_ENABLED !== "0" && env.WFM_HISTORY !== "0";
-  const historyDbPath = (env.WFM_HISTORY_DB ?? ".cache/wf-riventrader/history.db").trim();
+  const historyDbPath = (env.WFM_HISTORY_DB ?? ".cache/the-plat-exchange/history.db").trim();
   const remoteDataUrl = env.WFM_DATA_URL === "off" || env.WFM_DATA_URL === ""
     ? undefined
-    : env.WFM_DATA_URL ?? "https://raw.githubusercontent.com/ck0i/WF-RivenTrader/data/data/latest/state.json";
+    : env.WFM_DATA_URL ?? "https://raw.githubusercontent.com/ck0i/ThePlatExchange/data/data/latest/state.json";
   const remoteDataBase = env.WFM_DATA_BASE === "off" || env.WFM_DATA_BASE === ""
     ? undefined
-    : env.WFM_DATA_BASE ?? "https://raw.githubusercontent.com/ck0i/WF-RivenTrader/data/data";
+    : env.WFM_DATA_BASE ?? "https://raw.githubusercontent.com/ck0i/ThePlatExchange/data/data";
 
   return {
     host,

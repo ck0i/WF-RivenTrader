@@ -33,7 +33,7 @@ function parseArgs(argv: string[], env: NodeJS.ProcessEnv): Args {
   };
   return {
     dataDir: arg("--data-dir") ?? env.WFM_DATA_DIR ?? "data",
-    userAgent: env.WFM_SENTIMENT_UA ?? "wf-riventrader-sentiment/0.1 (+https://github.com/ck0i/WF-RivenTrader)",
+    userAgent: env.WFM_SENTIMENT_UA ?? "the-plat-exchange-sentiment/0.1 (+https://github.com/ck0i/ThePlatExchange)",
     redditPause: Number(env.WFM_REDDIT_PAUSE_MS ?? 1500),
   };
 }

@@ -930,7 +930,7 @@ function populateMcp() {
   if (elements.mcpConfigDesktop) {
     elements.mcpConfigDesktop.textContent = JSON.stringify({
       mcpServers: {
-        "wf-riventrader": {
+        "the-plat-exchange": {
           command: "npx",
           args: ["-y", "mcp-remote", sseUrl],
         },
@@ -938,7 +938,7 @@ function populateMcp() {
     }, null, 2);
   }
   if (elements.mcpConfigCli) {
-    elements.mcpConfigCli.textContent = `claude mcp add wf-riventrader --transport sse ${sseUrl}`;
+    elements.mcpConfigCli.textContent = `claude mcp add the-plat-exchange --transport sse ${sseUrl}`;
   }
   if (elements.mcpTestResult) elements.mcpTestResult.textContent = "";
   void loadMcpToolList();

@@ -28,11 +28,11 @@ interface VersionInfo {
 
 const DEFAULT_OPTIONS: ClientOptions = {
   baseUrl: "https://api.warframe.market",
-  cacheDir: ".cache/wf-riventrader",
+  cacheDir: ".cache/the-plat-exchange",
   ratePerSecond: 3,
   burst: 20,
   maxRetries: 6,
-  userAgent: "wf-riventrader-ts/0.1 (public API, cached, rate-limited)",
+  userAgent: "the-plat-exchange-ts/0.1 (public API, cached, rate-limited)",
 };
 
 export class WarframeMarketClient {
@@ -83,7 +83,7 @@ export class WarframeMarketClient {
     }
 
     try {
-      const imageMap = await fetchWarframestatImageMap(this.headers["User-Agent"] ?? "wf-riventrader/0.1");
+      const imageMap = await fetchWarframestatImageMap(this.headers["User-Agent"] ?? "the-plat-exchange/0.1");
       enrichWeaponsWithImageNames(rivenWeapons, imageMap);
     } catch {
       // non-fatal — reference works without images
@@ -140,7 +140,7 @@ export class WarframeMarketClient {
   private async backfillImageNames(snapshot: ReferenceSnapshot): Promise<void> {
     if (!snapshot.rivenWeapons.some((weapon) => !weapon.imageName)) return;
     try {
-      const imageMap = await fetchWarframestatImageMap(this.headers["User-Agent"] ?? "wf-riventrader/0.1");
+      const imageMap = await fetchWarframestatImageMap(this.headers["User-Agent"] ?? "the-plat-exchange/0.1");
       const matched = enrichWeaponsWithImageNames(snapshot.rivenWeapons, imageMap);
       if (matched > 0) await this.writeReferenceCache(snapshot);
     } catch {

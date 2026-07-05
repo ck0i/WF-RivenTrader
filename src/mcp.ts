@@ -24,7 +24,7 @@ import {
 } from "./mcp/schemas.js";
 import { isRecord, readNumber, readPositiveInteger, readString, readStringArray } from "./wfm/guards.js";
 import { attributeSignature } from "./wfm/opportunities.js";
-import type { RivenTraderService } from "./wfm/scanner.js";
+import type { ThePlatExchangeService } from "./wfm/scanner.js";
 import type { DashboardState, Opportunity, TraderConfig } from "./wfm/types.js";
 
 interface McpSession {
@@ -45,7 +45,7 @@ const LIVE_WINDOW_MS = 5 * 60_000;
 export class McpSseServer {
   private readonly sessions = new Map<string, McpSession>();
 
-  constructor(private readonly service: RivenTraderService) {}
+  constructor(private readonly service: ThePlatExchangeService) {}
 
   handleSse(request: IncomingMessage, response: ServerResponse): void {
     const sessionId = randomUUID();
@@ -58,7 +58,7 @@ export class McpSseServer {
     const session: McpSession = { id: sessionId, response, createdAt: Date.now() };
     this.sessions.set(sessionId, session);
     this.writeEvent(response, "endpoint", `/mcp/messages?sessionId=${encodeURIComponent(sessionId)}`);
-    this.writeEvent(response, "message", JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: { server: "wf-riventrader" } }));
+    this.writeEvent(response, "message", JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: { server: "the-plat-exchange" } }));
     request.on("close", () => {
       this.sessions.delete(sessionId);
     });
@@ -95,17 +95,17 @@ export class McpSseServer {
       return ok(request.id, {
         protocolVersion: "2024-11-05",
         capabilities: { tools: { listChanged: false }, resources: { subscribe: false, listChanged: false } },
-        serverInfo: { name: "wf-riventrader", version: "0.1.0" },
+        serverInfo: { name: "the-plat-exchange", version: "0.1.0" },
       });
     }
     if (request.method === "ping") return ok(request.id, {});
     if (request.method === "tools/list") return ok(request.id, { tools: this.tools() });
     if (request.method === "tools/call") return this.handleToolCall(request);
     if (request.method === "resources/list") {
-      return ok(request.id, { resources: [{ uri: "wf-riventrader://snapshot", name: "Current riven trader snapshot", mimeType: "application/json" }] });
+      return ok(request.id, { resources: [{ uri: "the-plat-exchange://snapshot", name: "Current ThePlatExchange snapshot", mimeType: "application/json" }] });
     }
     if (request.method === "resources/read") {
-      return ok(request.id, { contents: [{ uri: "wf-riventrader://snapshot", mimeType: "application/json", text: JSON.stringify(this.service.getState(), null, 2) }] });
+      return ok(request.id, { contents: [{ uri: "the-plat-exchange://snapshot", mimeType: "application/json", text: JSON.stringify(this.service.getState(), null, 2) }] });
     }
     return err(request.id, -32601, `Unsupported MCP method: ${request.method}`, { retryable: false });
   }
@@ -114,7 +114,7 @@ export class McpSseServer {
     if (!isRecord(request.params)) return err(request.id, -32602, "tools/call requires params", { retryable: false });
     const name = readString(request.params, "name");
     const argumentsRecord = readRecordFromParams(request.params, "arguments");
-    if (name === "riven_trader_snapshot") return this.snapshotTool(request.id, argumentsRecord);
+    if (name === "the_plat_exchange_snapshot") return this.snapshotTool(request.id, argumentsRecord);
     if (name === "riven_opportunities") return this.opportunitiesTool(request.id, argumentsRecord);
     if (name === "riven_refresh") return this.refreshTool(request.id);
     if (name === "riven_set_watchlist") return this.watchlistTool(request.id, argumentsRecord);
@@ -290,8 +290,8 @@ export class McpSseServer {
   private tools(): Array<Record<string, unknown>> {
     return [
       {
-        name: "riven_trader_snapshot",
-        description: "Return the current Warframe.market riven trader dashboard snapshot wrapped in a versioned envelope. Inspect `meta.quality` and `meta.warnings` before consuming `data.opportunities` — red means don't trust.",
+        name: "the_plat_exchange_snapshot",
+        description: "Return the current ThePlatExchange dashboard snapshot wrapped in a versioned envelope. Inspect `meta.quality` and `meta.warnings` before consuming `data.opportunities` — red means don't trust.",
         inputSchema: { type: "object", properties: { limit: { type: "number", minimum: 1, default: 25 } }, additionalProperties: false },
         outputSchema: outputSchemas.snapshot,
       },

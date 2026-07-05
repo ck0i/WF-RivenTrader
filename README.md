@@ -1,6 +1,6 @@
-# WF-RivenTrader
+# ThePlatExchange
 
-WF-RivenTrader is a TypeScript dashboard for finding Warframe riven arbitrage opportunities: buy low, sell high, and sort by expected platinum margin, ROI, confidence, and seller availability.
+ThePlatExchange is a TypeScript dashboard for finding Warframe riven arbitrage opportunities: buy low, sell high, and sort by expected platinum margin, ROI, confidence, and seller availability.
 
 It reads public Warframe.market riven data, enriches weapons with warframestat.us images, and serves both a browser UI and an MCP-over-SSE endpoint for MCP-aware clients.
 
@@ -106,7 +106,7 @@ Most settings can be changed in the UI. Environment variables are useful for sta
 | `WFM_BURST` | `20` | Warframe.market request burst size. |
 | `WFM_CONCURRENCY` | `4` | Local scan worker count. |
 | `WFM_HISTORY_ENABLED` | enabled | Set `0` to disable the local SQLite history store. |
-| `WFM_HISTORY_DB` | `.cache/wf-riventrader/history.db` | Local history database path. |
+| `WFM_HISTORY_DB` | `.cache/the-plat-exchange/history.db` | Local history database path. |
 | `WFM_DATA_URL` | project data feed | Remote state JSON URL. Set `off` to disable. |
 | `WFM_DATA_BASE` | project data root | Remote valuation/velocity data root. Set `off` to disable. |
 
@@ -128,7 +128,7 @@ Open **Settings → MCP connect** in the dashboard to copy Claude Desktop or Cla
 
 Available MCP tools include:
 
-- `riven_trader_snapshot`
+- `the_plat_exchange_snapshot`
 - `riven_opportunities`
 - `riven_refresh`
 - `riven_set_watchlist`

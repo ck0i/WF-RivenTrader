@@ -54,7 +54,7 @@ type StateListener = (state: DashboardState) => void;
 
 const HOT_SCORE_MIN_HOURS_BETWEEN_RESCANS = 3;
 
-export class RivenTraderService {
+export class ThePlatExchangeService {
   private readonly client: WarframeMarketClient;
   private readonly history: PriceHistoryStore | undefined;
   private readonly listeners = new Set<StateListener>();
