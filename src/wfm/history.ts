@@ -346,6 +346,19 @@ export class PriceHistoryStore {
     };
   }
 
+  listSignaturesForWeapon(weaponSlug: string, limit: number): string[] {
+    const stmt = this.db.prepare(`
+      SELECT signature, COUNT(*) AS sample_count
+      FROM signature_samples
+      WHERE weapon_slug = ?
+      GROUP BY signature
+      ORDER BY sample_count DESC
+      LIMIT ?
+    `);
+    const rows = stmt.all(weaponSlug, limit) as unknown as Array<{ signature: string; sample_count: number }>;
+    return rows.map((row) => row.signature);
+  }
+
   recentDispositionChanges(sinceTsSeconds: number): Array<{ weapon_slug: string; delta: number }> {
     const stmt = this.db.prepare(`
       WITH ranked AS (

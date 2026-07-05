@@ -110,13 +110,17 @@ export function analyzeMarket(
       const comparables = groupType === "exact-stats" ? exactGroup : directAuctions;
       if (comparables.length < config.minGroupSize) continue;
 
-      const comparablePrices = comparables.map((entry) => entry.buyoutPrice).filter((price) => price > 0).sort((left, right) => left - right);
-      if (comparablePrices.length < config.minGroupSize) continue;
+      const rawPrices = comparables.map((entry) => entry.buyoutPrice).filter((price) => price > 0).sort((left, right) => left - right);
+      if (rawPrices.length < config.minGroupSize) continue;
+      // Trim outliers before percentile computation so a lone 2M-plat listing
+      // can't inflate the target above what real trades close at.
+      const comparablePrices = trimOutliers(rawPrices);
 
       const targetSellPrice = Math.round(percentile(comparablePrices, 0.75));
       if (config.maxSellPrice !== null && targetSellPrice > config.maxSellPrice) continue;
       const conservativeSellPrice = Math.round(percentile(comparablePrices, 0.5));
-      const expectedProfit = targetSellPrice - auction.buyoutPrice;
+      // Profit is based on the trimmed median — realistic, not aspirational.
+      const expectedProfit = conservativeSellPrice - auction.buyoutPrice;
       const roi = expectedProfit / auction.buyoutPrice;
       if (expectedProfit < config.minProfit || roi < config.minRoi) continue;
 
@@ -169,6 +173,12 @@ export function attributeSignature(attributes: AuctionAttribute[]): string {
   const positives = attributes.filter((attribute) => attribute.positive).map((attribute) => attribute.urlName).sort();
   const negatives = attributes.filter((attribute) => !attribute.positive).map((attribute) => attribute.urlName).sort();
   return `+${positives.join("+")}|-${negatives.join("-")}`;
+}
+
+function trimOutliers(sortedValues: readonly number[], trimPct: number = 0.05): number[] {
+  if (sortedValues.length < 20) return [...sortedValues];
+  const drop = Math.max(1, Math.floor(sortedValues.length * trimPct));
+  return sortedValues.slice(drop, sortedValues.length - drop);
 }
 
 export function percentile(sortedValues: readonly number[], fraction: number): number {

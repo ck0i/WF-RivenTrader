@@ -377,6 +377,32 @@ export class RivenTraderService {
     return this.reference?.rivenWeapons ?? [];
   }
 
+  getSignaturesForWeapon(weaponSlug: string, limit: number = 20): Array<SignatureValuationResult & { velocity: SignatureVelocityResult | null }> {
+    const results: Array<SignatureValuationResult & { velocity: SignatureVelocityResult | null }> = [];
+    if (this.mode === "remote") {
+      const prefix = `${weaponSlug}::`;
+      for (const [key, valuation] of this.remoteValuations) {
+        if (!key.startsWith(prefix)) continue;
+        const velocity = this.remoteVelocities.get(key) ?? null;
+        results.push({ ...valuation, velocity });
+      }
+    } else if (this.history) {
+      try {
+        const signatures = this.history.listSignaturesForWeapon(weaponSlug, limit);
+        for (const signature of signatures) {
+          const valuation = this.history.signatureValuation(weaponSlug, signature);
+          if (valuation.sample_count === 0) continue;
+          const velocity = this.history.signatureVelocity(weaponSlug, signature);
+          results.push({ ...valuation, velocity });
+        }
+      } catch {
+        // ignore
+      }
+    }
+    results.sort((left, right) => right.sample_count - left.sample_count);
+    return results.slice(0, limit);
+  }
+
   private buildRemoteImageMap(): Map<string, string> {
     const map = new Map<string, string>();
     const source = this.remoteReference?.rivenWeapons ?? this.reference?.rivenWeapons ?? [];

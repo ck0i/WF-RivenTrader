@@ -190,6 +190,12 @@ export function createAppServer(service: RivenTraderService, options: AppServerO
         sendJson(response, 200, listWeapons(service, url));
         return;
       }
+      if (request.method === "GET" && url.pathname.startsWith("/api/weapon/")) {
+        const slug = decodeURIComponent(url.pathname.slice("/api/weapon/".length));
+        const detail = computeWeaponDetail(service, slug);
+        sendJson(response, detail ? 200 : 404, detail ?? { error: `unknown weapon: ${slug}` });
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/api/mcp-info") {
         sendJson(response, 200, {
           endpoint: "/mcp/sse",
@@ -306,6 +312,27 @@ function listWeapons(service: RivenTraderService, url: URL): Array<Record<string
       auctionsUrl: `https://warframe.market/auctions/search?type=riven&weapon_url_name=${encodeURIComponent(weapon.slug)}&sort_by=price_asc`,
     };
   });
+}
+
+function computeWeaponDetail(service: RivenTraderService, slug: string): Record<string, unknown> | null {
+  const weapons = service.getAllWeapons();
+  const weapon = weapons.find((entry) => entry.slug === slug);
+  if (!weapon) return null;
+  const state = service.getState();
+  const summary = state.weaponSummaries.find((entry) => entry.slug === slug) ?? null;
+  const ctx = buildEnrichmentContext(service);
+  const opportunities = state.opportunities
+    .filter((entry) => entry.weaponSlug === slug)
+    .map((entry) => enrichOpportunity(entry, Date.parse(state.generatedAt), ctx))
+    .slice(0, 50);
+  const signatures = service.getSignaturesForWeapon(slug, 24);
+  return {
+    weapon,
+    summary,
+    opportunities,
+    signatures,
+    auctionsUrl: `https://warframe.market/auctions/search?type=riven&weapon_url_name=${encodeURIComponent(slug)}&sort_by=price_asc`,
+  };
 }
 
 function computeSignatureValue(service: RivenTraderService, url: URL): Record<string, unknown> | null {

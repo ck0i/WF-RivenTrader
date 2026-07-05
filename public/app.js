@@ -1,6 +1,5 @@
 const elements = {
-  sseBadge: document.getElementById("sseBadge"),
-  scanBadge: document.getElementById("scanBadge"),
+  topBar: document.getElementById("topBar"),
   statOpps: document.getElementById("statOpps"),
   statWeapons: document.getElementById("statWeapons"),
   statWeaponsSub: document.getElementById("statWeaponsSub"),
@@ -25,17 +24,13 @@ const elements = {
   instantWinsPanel: document.getElementById("instantWinsPanel"),
   instantList: document.getElementById("instantList"),
   instantSummary: document.getElementById("instantSummary"),
-  signatureForm: document.getElementById("signatureForm"),
-  sigWeapon: document.getElementById("sigWeapon"),
-  sigPositives: document.getElementById("sigPositives"),
-  sigNegatives: document.getElementById("sigNegatives"),
-  sigResult: document.getElementById("sigResult"),
-  weaponSearch: document.getElementById("weaponSearch"),
-  weaponResults: document.getElementById("weaponResults"),
   modeButtons: document.querySelectorAll(".mode-btn"),
   modeHint: document.getElementById("modeHint"),
-  mcpButton: document.getElementById("mcpConnectButton"),
-  mcpModal: document.getElementById("mcpModal"),
+  dataStatusLine: document.getElementById("dataStatusLine"),
+  settingsButton: document.getElementById("settingsButton"),
+  settingsModal: document.getElementById("settingsModal"),
+  settingsTabs: document.querySelectorAll(".settings-tab"),
+  settingsPanels: document.querySelectorAll(".settings-panel"),
   mcpEndpoint: document.getElementById("mcpEndpoint"),
   mcpConfigDesktop: document.getElementById("mcpConfigDesktop"),
   mcpConfigCli: document.getElementById("mcpConfigCli"),
@@ -54,6 +49,13 @@ const elements = {
   heroComps: document.getElementById("heroComps"),
   heroSignals: document.getElementById("heroSignals"),
   heroOpen: document.getElementById("heroOpen"),
+  spotlight: document.getElementById("spotlight"),
+  spotlightInput: document.getElementById("spotlightInput"),
+  spotlightResults: document.getElementById("spotlightResults"),
+  spotlightOverlay: document.getElementById("spotlightOverlay"),
+  spotlightTrigger: document.getElementById("spotlightTrigger"),
+  weaponModal: document.getElementById("weaponModal"),
+  wdContent: document.getElementById("wdContent"),
 };
 
 let latestState = null;
@@ -62,10 +64,12 @@ let latestInstantWins = [];
 let scatterHits = [];
 let controlsHydrated = false;
 let sortState = { key: "expectedProfit", direction: "desc" };
-let weaponSearchTimer = null;
 let heroOpportunity = null;
+let spotlightTimer = null;
+let spotlightItems = [];
+let spotlightIndex = -1;
+let spotlightFilter = null;
 
-// Signals ranked by decision-impact — the higher on this list, the more it should be shown first
 const SIGNAL_PRIORITY = [
   "undervalued_signature",
   "fast_moving",
@@ -94,12 +98,13 @@ async function refreshDerived() {
     ]);
     latestEnrichedOpps = Array.isArray(opps) ? opps : [];
     latestInstantWins = Array.isArray(wins) ? wins : [];
-    renderTable(sortedOpportunities(latestEnrichedOpps));
-    drawChart(latestEnrichedOpps);
+    const filtered = applySpotlightFilter(latestEnrichedOpps);
+    renderTable(sortedOpportunities(filtered));
+    drawChart(filtered);
     renderInstantWins(latestInstantWins);
-    renderHero(latestEnrichedOpps[0] ?? null);
+    renderHero(filtered[0] ?? latestEnrichedOpps[0] ?? null);
   } catch {
-    // network hiccup
+    // ignore
   }
 }
 
@@ -113,17 +118,11 @@ async function postJson(path, body) {
 function render(state) {
   latestState = state;
   hydrateControls(state);
-  const running = state.status.running;
-  elements.scanBadge.textContent = running
-    ? `${state.status.reason}: ${state.status.scannedWeapons}/${state.status.totalWeapons}`
-    : (state.status.lastMessage ?? "").length > 60
-      ? `${(state.status.lastMessage ?? "").slice(0, 60)}…`
-      : (state.status.lastMessage ?? "idle");
-  elements.scanBadge.className = running ? "badge warn" : "badge good";
   elements.statOpps.textContent = String(state.totals.opportunities);
   const totalRefWeapons = state.reference?.weapons ?? 0;
   const covered = state.totals?.weaponsWithAuctions ?? 0;
   elements.statWeapons.textContent = `${covered}/${totalRefWeapons}`;
+  const running = state.status.running;
   const tierLabel = state.status.reason && state.status.reason.includes("-") ? state.status.reason.split("-").pop() : null;
   if (elements.statWeaponsSub) {
     elements.statWeaponsSub.textContent = running
@@ -136,12 +135,13 @@ function render(state) {
   elements.statBest.style.display = best ? "" : "none";
   elements.statRefresh.textContent = shortTime(state.status.finishedAt || state.generatedAt);
   elements.summary.textContent = state.status.lastError ? state.status.lastError : state.status.lastMessage;
-  updateModeUi(state.scanMode ?? "tiered");
+  updateModeUi(state.scanMode ?? "tiered", state);
   renderWeapons(state.weaponSummaries);
   if (latestEnrichedOpps.length === 0) {
-    renderTable(sortedOpportunities(state.opportunities));
-    drawChart(state.opportunities);
-    renderHero(state.opportunities?.[0] ?? null);
+    const filtered = applySpotlightFilter(state.opportunities);
+    renderTable(sortedOpportunities(filtered));
+    drawChart(filtered);
+    renderHero(filtered[0] ?? state.opportunities?.[0] ?? null);
   }
 }
 
@@ -159,7 +159,6 @@ function hydrateControls(state) {
   for (const checkbox of document.querySelectorAll(".status")) {
     checkbox.checked = state.config.statuses.includes(checkbox.value);
   }
-  loadWeaponBrowser("");
 }
 
 function renderHero(opportunity) {
@@ -177,12 +176,14 @@ function renderHero(opportunity) {
   elements.heroTier.className = `tier-badge tier-${tier}`;
   elements.heroRiven.textContent = opportunity.rivenName;
   elements.heroBuy.textContent = `${opportunity.buyPrice}p`;
-  elements.heroTarget.textContent = `${opportunity.targetSellPrice}p`;
+  elements.heroTarget.textContent = `${opportunity.conservativeSellPrice}p`;
+  elements.heroTarget.title = `Median target · p75 aggressive ${opportunity.targetSellPrice}p`;
   elements.heroProfit.textContent = `+${opportunity.expectedProfit}p profit`;
   elements.heroRoi.textContent = `${Math.round(opportunity.roi * 100)}% ROI`;
   elements.heroComps.textContent = `${opportunity.comparableListings} comparable listing${opportunity.comparableListings === 1 ? "" : "s"}`;
-  const topSignals = topSignalsFor(opportunity, 3);
-  elements.heroSignals.innerHTML = topSignals.map((signal) => `<span class="signal signal-${signal}">${signal.replace(/_/g, " ")}</span>`).join("");
+  elements.heroSignals.innerHTML = topSignalsFor(opportunity, 3)
+    .map((signal) => `<span class="signal signal-${signal}">${signal.replace(/_/g, " ")}</span>`)
+    .join("");
 }
 
 if (elements.heroOpen) {
@@ -209,12 +210,11 @@ function renderTable(opportunities) {
     row.className = `tier-${tier}`;
     const topSignals = topSignalsFor(opportunity, 2);
     const signalHtml = topSignals.map((signal) => `<span class="signal signal-${signal}">${signal.replace(/_/g, " ")}</span>`).join("");
-    const sellerText = `${escapeHtml(opportunity.seller.ingameName)} · ${opportunity.status} · rep ${opportunity.seller.reputation}`;
-    row.title = `${sellerText}\n${opportunity.comparableListings} comparable · ${opportunity.groupType}\nScore ${opportunity.score}/100 · confidence ${Math.round(opportunity.confidence * 100)}%`;
+    row.title = `${opportunity.seller.ingameName} · ${opportunity.status} · rep ${opportunity.seller.reputation}\n${opportunity.comparableListings} comparable · ${opportunity.groupType}\nScore ${opportunity.score}/100 · confidence ${Math.round(opportunity.confidence * 100)}%`;
     row.innerHTML = `
       <td class="rank-cell">${index + 1}</td>
       <td>
-        <div class="weapon-cell">
+        <div class="weapon-cell" data-weapon-slug="${escapeHtml(opportunity.weaponSlug)}">
           ${weaponThumb(opportunity.imageName, opportunity.weaponName, "sm")}
           <div class="weapon-cell-text">
             <strong>${escapeHtml(opportunity.weaponName)}</strong>
@@ -225,19 +225,27 @@ function renderTable(opportunities) {
       <td class="trade-cell">
         <span class="trade-buy">${opportunity.buyPrice}p</span>
         <span class="trade-arrow">→</span>
-        <span class="trade-target">${opportunity.targetSellPrice}p</span>
+        <span class="trade-target" title="Median of trimmed comparables">${opportunity.conservativeSellPrice}p</span>
       </td>
       <td class="profit-cell">+${opportunity.expectedProfit}<span class="p-suffix">p</span></td>
       <td class="roi-cell">${Math.round(opportunity.roi * 100)}%</td>
       <td class="signals-cell">${signalHtml || `<span class="signal-empty">—</span>`}</td>
       <td class="tier-cell"><span class="tier-badge tier-${tier}">${tier}</span></td>
     `;
-    row.addEventListener("click", () => window.open(opportunity.url, "_blank", "noopener"));
+    row.addEventListener("click", (event) => {
+      const weaponCell = event.target instanceof HTMLElement ? event.target.closest("[data-weapon-slug]") : null;
+      if (weaponCell) {
+        openWeaponDetail(weaponCell.dataset.weaponSlug);
+        event.stopPropagation();
+        return;
+      }
+      window.open(opportunity.url, "_blank", "noopener");
+    });
     elements.opps.appendChild(row);
   }
   if (opportunities.length === 0) {
     const row = document.createElement("tr");
-    row.innerHTML = `<td colspan="7" class="small" style="padding:24px 16px">No opportunities yet. Wait for more weapon books, lower the profit floor, or include offline sellers.</td>`;
+    row.innerHTML = `<td colspan="7" class="small" style="padding:24px 16px">No opportunities match. Adjust filters, clear the search, or wait for the next scan.</td>`;
     elements.opps.appendChild(row);
   }
 }
@@ -285,6 +293,7 @@ function renderWeapons(summaries) {
     const stats = summary.priceStats;
     const card = document.createElement("article");
     card.className = "panel weapon-card";
+    card.dataset.weaponSlug = summary.slug;
     card.innerHTML = `<div class="weapon-card-head">${weaponThumb(summary.imageName, summary.name, "sm")}<h3>${escapeHtml(summary.name)}</h3></div>
       <dl>
         <dt>Listings</dt><dd>${summary.directListings}</dd>
@@ -293,6 +302,7 @@ function renderWeapons(summaries) {
         <dt>P75</dt><dd>${stats ? `${stats.p75}p` : "—"}</dd>
         <dt>Dispo</dt><dd>${summary.disposition.toFixed(2)}</dd>
       </dl>`;
+    card.addEventListener("click", () => openWeaponDetail(summary.slug));
     elements.weapons.appendChild(card);
   }
 }
@@ -318,20 +328,14 @@ function drawChart(opportunities) {
   context.lineWidth = 1;
   for (let i = 0; i <= 4; i += 1) {
     const y = marginY + (i * plotH) / 4;
-    context.beginPath();
-    context.moveTo(marginX, y);
-    context.lineTo(width - marginX, y);
-    context.stroke();
+    context.beginPath(); context.moveTo(marginX, y); context.lineTo(width - marginX, y); context.stroke();
     const x = marginX + (i * plotW) / 4;
-    context.beginPath();
-    context.moveTo(x, marginY);
-    context.lineTo(x, height - marginY);
-    context.stroke();
+    context.beginPath(); context.moveTo(x, marginY); context.lineTo(x, height - marginY); context.stroke();
   }
 
   scatterHits = [];
   if (opportunities.length === 0) {
-    context.fillStyle = "#4f5a68";
+    context.fillStyle = "#4a5566";
     context.font = "13px Inter, sans-serif";
     context.fillText("Waiting for opportunities…", marginX + 4, height / 2);
     return;
@@ -355,18 +359,12 @@ function drawChart(opportunities) {
     const cx = marginX + (roi / maxRoi) * plotW;
     const cy = height - marginY - (profit / maxProfit) * plotH;
     const tier = opportunity.quality?.tier ?? "D";
-    const signals = opportunity.quality?.signals ?? [];
-    const undervalued = signals.includes("undervalued_signature");
+    const undervalued = (opportunity.quality?.signals ?? []).includes("undervalued_signature");
     context.fillStyle = TIER_COLORS[tier] ?? TIER_COLORS.D;
-    context.beginPath();
-    context.arc(cx, cy, 4.5, 0, Math.PI * 2);
-    context.fill();
+    context.beginPath(); context.arc(cx, cy, 4.5, 0, Math.PI * 2); context.fill();
     if (undervalued) {
-      context.strokeStyle = "rgba(255,255,255,0.85)";
-      context.lineWidth = 1.5;
-      context.beginPath();
-      context.arc(cx, cy, 8, 0, Math.PI * 2);
-      context.stroke();
+      context.strokeStyle = "rgba(255,255,255,0.85)"; context.lineWidth = 1.5;
+      context.beginPath(); context.arc(cx, cy, 8, 0, Math.PI * 2); context.stroke();
     }
     scatterHits.push({ cx, cy, r: 4.5, opportunity });
   }
@@ -386,17 +384,12 @@ function canvasPointFromEvent(event) {
 }
 
 function findScatterHit(mx, my, tolerance = 3) {
-  let best = null;
-  let bestDist = Infinity;
+  let best = null; let bestDist = Infinity;
   for (const hit of scatterHits) {
-    const dx = hit.cx - mx;
-    const dy = hit.cy - my;
+    const dx = hit.cx - mx; const dy = hit.cy - my;
     const dist = dx * dx + dy * dy;
     const limit = (hit.r + tolerance) ** 2;
-    if (dist <= limit && dist < bestDist) {
-      best = hit;
-      bestDist = dist;
-    }
+    if (dist <= limit && dist < bestDist) { best = hit; bestDist = dist; }
   }
   return best;
 }
@@ -436,12 +429,7 @@ if (elements.chart) {
       elements.chart.style.cursor = "default";
     }
   });
-
-  elements.chart.addEventListener("mouseleave", () => {
-    elements.chartTip.hidden = true;
-    elements.chart.style.cursor = "default";
-  });
-
+  elements.chart.addEventListener("mouseleave", () => { elements.chartTip.hidden = true; elements.chart.style.cursor = "default"; });
   elements.chart.addEventListener("click", (event) => {
     const { mx, my } = canvasPointFromEvent(event);
     const hit = findScatterHit(mx, my, 6);
@@ -449,106 +437,326 @@ if (elements.chart) {
   });
 }
 
-async function loadWeaponBrowser(query) {
-  if (!elements.weaponResults) return;
-  try {
-    const params = new URLSearchParams({ q: query, limit: "40" });
-    const response = await fetch(`/api/weapons?${params.toString()}`);
-    if (!response.ok) throw new Error(`status ${response.status}`);
-    const items = await response.json();
-    renderWeaponResults(items);
-  } catch (error) {
-    elements.weaponResults.innerHTML = `<div class="small" style="padding:12px">Search failed: ${escapeHtml(error.message)}</div>`;
+// -------- Spotlight search --------
+
+function parseSpotlightQuery(raw) {
+  const trimmed = raw.trim();
+  if (!trimmed) return { text: "", filter: null };
+  const priceRegex = /\s*(<=|>=|<|>|=)\s*(\d+)\s*p?\s*$/i;
+  const match = trimmed.match(priceRegex);
+  if (match) {
+    const op = match[1];
+    const price = Number(match[2]);
+    const text = trimmed.slice(0, match.index ?? trimmed.length).trim();
+    return { text, filter: { field: "buyPrice", op, value: price } };
   }
+  return { text: trimmed, filter: null };
 }
 
-function renderWeaponResults(items) {
-  elements.weaponResults.textContent = "";
-  if (!items || items.length === 0) {
-    elements.weaponResults.innerHTML = `<div class="small" style="padding:12px">No matches.</div>`;
-    return;
-  }
-  const list = document.createElement("ul");
-  list.className = "weapon-list";
-  for (const item of items) {
-    const li = document.createElement("li");
-    li.className = "weapon-row" + (item.hasData ? " has-data" : "");
-    const stats = item.summary?.priceStats;
-    const priceLine = stats ? `median ${stats.median}p · p75 ${stats.p75}p` : "no scan data";
-    const imageName = item.imageName ?? item.summary?.imageName;
-    li.innerHTML = `
-      ${weaponThumb(imageName, item.name, "sm")}
-      <div class="wr-main">
-        <strong>${escapeHtml(item.name)}</strong>
-        <div class="small">${escapeHtml(item.group)} · dispo ${item.disposition.toFixed(2)}</div>
-      </div>
-      <div class="wr-side small">
-        ${priceLine}
-        <button class="secondary wr-open" type="button" data-slug="${escapeHtml(item.slug)}" title="Open on warframe.market">open ↗</button>
-      </div>`;
-    li.addEventListener("click", (event) => {
-      if (event.target instanceof HTMLButtonElement) return;
-      elements.sigWeapon.value = item.slug;
-      elements.sigWeapon.focus();
-      const traitSection = elements.signatureForm.closest("details");
-      if (traitSection && !traitSection.open) traitSection.open = true;
-    });
-    li.querySelector(".wr-open").addEventListener("click", (event) => {
-      event.stopPropagation();
-      window.open(item.auctionsUrl, "_blank", "noopener");
-    });
-    list.appendChild(li);
-  }
-  elements.weaponResults.appendChild(list);
-}
-
-if (elements.weaponSearch) {
-  elements.weaponSearch.addEventListener("input", () => {
-    const value = elements.weaponSearch.value.trim();
-    if (weaponSearchTimer) clearTimeout(weaponSearchTimer);
-    weaponSearchTimer = setTimeout(() => loadWeaponBrowser(value), 180);
+function applySpotlightFilter(opportunities) {
+  if (!spotlightFilter) return opportunities;
+  const { text, filter } = spotlightFilter;
+  const needle = text.toLowerCase();
+  return opportunities.filter((opportunity) => {
+    if (needle && !(opportunity.weaponName.toLowerCase().includes(needle) || opportunity.weaponSlug.toLowerCase().includes(needle))) return false;
+    if (!filter) return true;
+    const value = opportunity[filter.field] ?? 0;
+    switch (filter.op) {
+      case "<": return value < filter.value;
+      case "<=": return value <= filter.value;
+      case ">": return value > filter.value;
+      case ">=": return value >= filter.value;
+      case "=": return value === filter.value;
+      default: return true;
+    }
   });
 }
 
-async function submitSignatureLookup(event) {
-  event.preventDefault();
-  const weapon = elements.sigWeapon.value.trim();
-  if (!weapon) {
-    elements.sigResult.textContent = "Enter a weapon slug first.";
+async function updateSpotlight(raw) {
+  const parsed = parseSpotlightQuery(raw);
+  const items = [];
+  if (parsed.text.length > 0) {
+    try {
+      const response = await fetch(`/api/weapons?q=${encodeURIComponent(parsed.text)}&limit=8`);
+      if (response.ok) {
+        const arr = await response.json();
+        for (const weapon of arr) {
+          items.push({
+            type: "weapon",
+            slug: weapon.slug,
+            name: weapon.name,
+            group: weapon.group,
+            disposition: weapon.disposition,
+            imageName: weapon.imageName ?? weapon.summary?.imageName,
+            summary: weapon.summary,
+          });
+        }
+      }
+    } catch { /* ignore */ }
+  }
+  if (parsed.filter) {
+    items.unshift({ type: "filter", text: parsed.text, filter: parsed.filter });
+  }
+  spotlightItems = items;
+  renderSpotlightResults(items);
+}
+
+function renderSpotlightResults(items) {
+  if (!elements.spotlightResults) return;
+  if (items.length === 0) {
+    elements.spotlightResults.hidden = true;
     return;
   }
-  const positives = elements.sigPositives.value.split(/[\n,]+/).map((entry) => entry.trim()).filter((entry) => entry.length > 0);
-  const negatives = elements.sigNegatives.value.split(/[\n,]+/).map((entry) => entry.trim()).filter((entry) => entry.length > 0);
-  const params = new URLSearchParams();
-  params.set("weapon_slug", weapon);
-  for (const positive of positives) params.append("positives", positive);
-  for (const negative of negatives) params.append("negatives", negative);
-  elements.sigResult.textContent = "Looking up…";
-  try {
-    const response = await fetch(`/api/signature-value?${params.toString()}`);
-    if (!response.ok) throw new Error(`status ${response.status}`);
-    const data = await response.json();
-    renderSignatureResult(data);
-  } catch (error) {
-    elements.sigResult.textContent = `Lookup failed: ${error.message}`;
+  elements.spotlightResults.hidden = false;
+  spotlightIndex = -1;
+  const html = items.map((item, index) => {
+    if (item.type === "filter") {
+      const label = item.text ? `${item.text} · ` : "";
+      return `<button class="spotlight-item spotlight-filter" data-index="${index}" type="button">
+        <span class="spotlight-glyph">≡</span>
+        <div class="spotlight-body">
+          <div class="spotlight-title">Filter table</div>
+          <div class="spotlight-sub">${escapeHtml(label)}buy price ${item.filter.op} ${item.filter.value}p</div>
+        </div>
+      </button>`;
+    }
+    const priceLine = item.summary?.priceStats
+      ? `median ${item.summary.priceStats.median}p · p75 ${item.summary.priceStats.p75}p`
+      : "";
+    return `<button class="spotlight-item spotlight-weapon" data-index="${index}" data-slug="${escapeHtml(item.slug)}" type="button">
+      ${weaponThumb(item.imageName, item.name, "sm")}
+      <div class="spotlight-body">
+        <div class="spotlight-title">${escapeHtml(item.name)}</div>
+        <div class="spotlight-sub">${escapeHtml(item.group)} · dispo ${item.disposition.toFixed(2)}${priceLine ? ` · ${escapeHtml(priceLine)}` : ""}</div>
+      </div>
+      <span class="spotlight-arrow">↵</span>
+    </button>`;
+  }).join("");
+  elements.spotlightResults.innerHTML = html;
+  for (const button of elements.spotlightResults.querySelectorAll(".spotlight-item")) {
+    button.addEventListener("click", () => activateSpotlightItem(Number(button.dataset.index)));
   }
 }
 
-function renderSignatureResult(data) {
-  if (!data || data.sample_count === 0) {
-    elements.sigResult.innerHTML = `<div class="small">No matching samples yet.${data?.note ? ` (${escapeHtml(data.note)})` : ""}</div>`;
-    return;
+function activateSpotlightItem(index) {
+  const item = spotlightItems[index];
+  if (!item) return;
+  if (item.type === "weapon") {
+    openWeaponDetail(item.slug);
+    closeSpotlightOverlay();
+    elements.spotlightInput.value = "";
+  } else if (item.type === "filter") {
+    spotlightFilter = { text: item.text, filter: item.filter };
+    closeSpotlightOverlay();
+    void refreshDerived();
   }
-  const velocity = data.velocity;
-  const velocityLine = velocity
-    ? `<div>velocity: ${velocity.classification} · vanish rate ${(velocity.vanish_rate * 100).toFixed(0)}% (n=${velocity.observed_listings})</div>`
-    : "";
-  elements.sigResult.innerHTML = `
-    <div><strong>${data.sample_count}</strong> samples over ${data.window_days ?? 30} days · conf ${Math.round(data.confidence * 100)}%</div>
-    <div>p25 <strong>${Math.round(data.p25 ?? 0)}p</strong> · median <strong>${Math.round(data.p50 ?? 0)}p</strong> · p75 <strong>${Math.round(data.p75 ?? 0)}p</strong> · p90 <strong>${Math.round(data.p90 ?? 0)}p</strong></div>
-    ${velocityLine}
-    <div class="small">signature: ${escapeHtml(data.signature ?? "")}</div>`;
 }
+
+function closeSpotlight() {
+  if (elements.spotlightResults) elements.spotlightResults.hidden = true;
+  spotlightIndex = -1;
+}
+
+function moveSpotlightSelection(delta) {
+  if (spotlightItems.length === 0) return;
+  spotlightIndex = (spotlightIndex + delta + spotlightItems.length) % spotlightItems.length;
+  for (const button of elements.spotlightResults.querySelectorAll(".spotlight-item")) {
+    button.classList.toggle("active", Number(button.dataset.index) === spotlightIndex);
+  }
+}
+
+function openSpotlightOverlay() {
+  if (elements.spotlightOverlay) {
+    elements.spotlightOverlay.hidden = false;
+    document.body.classList.add("spotlight-active");
+    requestAnimationFrame(() => elements.spotlightInput?.focus());
+  }
+}
+
+function closeSpotlightOverlay() {
+  document.body.classList.remove("spotlight-active");
+  if (elements.spotlightOverlay) elements.spotlightOverlay.hidden = true;
+  closeSpotlight();
+}
+
+if (elements.spotlightTrigger) {
+  elements.spotlightTrigger.addEventListener("click", () => openSpotlightOverlay());
+}
+if (elements.spotlightOverlay) {
+  elements.spotlightOverlay.addEventListener("click", (event) => {
+    if (event.target instanceof HTMLElement && event.target.dataset.spotlightClose !== undefined) {
+      closeSpotlightOverlay();
+    }
+  });
+}
+
+if (elements.spotlightInput) {
+  elements.spotlightInput.addEventListener("input", () => {
+    const value = elements.spotlightInput.value;
+    if (spotlightTimer) clearTimeout(spotlightTimer);
+    if (value.trim() === "" && spotlightFilter) {
+      spotlightFilter = null;
+      void refreshDerived();
+    }
+    spotlightTimer = setTimeout(() => updateSpotlight(value), 150);
+  });
+  elements.spotlightInput.addEventListener("focus", () => {
+    if (elements.spotlightInput.value.trim().length > 0) updateSpotlight(elements.spotlightInput.value);
+  });
+  elements.spotlightInput.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      elements.spotlightInput.value = "";
+      spotlightFilter = null;
+      closeSpotlightOverlay();
+      elements.spotlightInput.blur();
+      void refreshDerived();
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      moveSpotlightSelection(1);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      moveSpotlightSelection(-1);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      if (spotlightIndex >= 0) activateSpotlightItem(spotlightIndex);
+      else if (spotlightItems.length > 0) activateSpotlightItem(0);
+    }
+  });
+}
+
+document.addEventListener("keydown", (event) => {
+  const modKey = event.metaKey || event.ctrlKey;
+  if (modKey && event.key.toLowerCase() === "k") {
+    event.preventDefault();
+    openSpotlightOverlay();
+  }
+  if (event.key === "Escape") {
+    if (elements.weaponModal && !elements.weaponModal.hidden) closeWeaponModal();
+    else if (elements.settingsModal && !elements.settingsModal.hidden) closeSettingsModal();
+  }
+});
+
+// -------- Weapon detail modal --------
+
+async function openWeaponDetail(slug) {
+  if (!slug) return;
+  elements.weaponModal.hidden = false;
+  document.body.classList.add("modal-open");
+  elements.wdContent.innerHTML = `<div class="wd-loading">Loading ${escapeHtml(slug)}…</div>`;
+  try {
+    const response = await fetch(`/api/weapon/${encodeURIComponent(slug)}`);
+    if (!response.ok) throw new Error(`status ${response.status}`);
+    const detail = await response.json();
+    renderWeaponDetail(detail);
+  } catch (error) {
+    elements.wdContent.innerHTML = `<div class="wd-loading">Failed to load: ${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function closeWeaponModal() {
+  elements.weaponModal.hidden = true;
+  document.body.classList.remove("modal-open");
+}
+
+if (elements.weaponModal) {
+  elements.weaponModal.addEventListener("click", (event) => {
+    if (event.target instanceof HTMLElement && event.target.dataset.modalClose !== undefined) closeWeaponModal();
+  });
+}
+
+function renderWeaponDetail(detail) {
+  const { weapon, summary, opportunities, signatures, auctionsUrl } = detail;
+  const stats = summary?.priceStats;
+  const topSignatures = (signatures ?? []).filter((entry) => entry.sample_count > 0).slice(0, 8);
+
+  const signaturesHtml = topSignatures.length > 0
+    ? topSignatures.map((entry) => {
+        const [pos, neg] = parseSignature(entry.signature);
+        const positives = pos.map((p) => `<span class="flag good">+${escapeHtml(p)}</span>`).join("");
+        const negatives = neg.map((n) => `<span class="flag bad">-${escapeHtml(n)}</span>`).join("");
+        const velocity = entry.velocity;
+        const classification = velocity?.classification && velocity.classification !== "unknown"
+          ? `<span class="signal signal-${velocity.classification}">${velocity.classification.replace(/_/g, " ")}</span>`
+          : "";
+        return `<div class="wd-signature">
+          <div class="wd-signature-attrs"><div class="flags">${positives}${negatives}</div>${classification}</div>
+          <div class="wd-signature-stats">
+            <span><span class="small">p25</span> ${Math.round(entry.p25 ?? 0)}p</span>
+            <span><span class="small">median</span> <strong>${Math.round(entry.p50 ?? 0)}p</strong></span>
+            <span><span class="small">p75</span> ${Math.round(entry.p75 ?? 0)}p</span>
+            <span><span class="small">samples</span> ${entry.sample_count}</span>
+            <span><span class="small">conf</span> ${Math.round((entry.confidence ?? 0) * 100)}%</span>
+          </div>
+        </div>`;
+      }).join("")
+    : `<div class="wd-empty">No signature history yet. Once cold-scans have logged samples for this weapon over ~30 days, common stat combos with p25/median/p75 pricing will appear here.</div>`;
+
+  const opportunitiesHtml = opportunities.length > 0
+    ? opportunities.slice(0, 8).map((opp) => {
+        const tier = opp.quality?.tier ?? "D";
+        return `<div class="wd-opp" data-url="${escapeHtml(opp.url)}">
+          <div class="wd-opp-price"><span class="price">${opp.buyPrice}p</span> → ${opp.targetSellPrice}p <span class="profit">+${opp.expectedProfit}p</span></div>
+          <div class="wd-opp-meta small">${escapeHtml(opp.rivenName)} · ${escapeHtml(opp.seller.ingameName)} · ${opp.status} · comps ${opp.comparableListings}</div>
+          <div class="wd-opp-flags">${(opp.positives ?? []).slice(0, 4).map((p) => `<span class="flag good">+${escapeHtml(p)}</span>`).join("")}${(opp.negatives ?? []).slice(0, 2).map((n) => `<span class="flag bad">-${escapeHtml(n)}</span>`).join("")}<span class="tier-badge tier-${tier}">${tier}</span></div>
+        </div>`;
+      }).join("")
+    : `<div class="wd-empty">No actionable listings that match your current filters. Widen seller-status or lower min-profit to see more.</div>`;
+
+  elements.wdContent.innerHTML = `
+    <div class="wd-head">
+      <div class="wd-head-thumb">${weaponThumb(weapon.imageName, weapon.name, "lg")}</div>
+      <div class="wd-head-body">
+        <div class="wd-eyebrow">${escapeHtml(weapon.group)} · MR ${weapon.reqMasteryRank}</div>
+        <h2 class="wd-name">${escapeHtml(weapon.name)}</h2>
+        <div class="wd-facts">
+          <span>disposition <strong>${weapon.disposition.toFixed(2)}</strong></span>
+          <span>direct listings <strong>${summary?.directListings ?? 0}</strong></span>
+          <span>online <strong>${summary?.onlineListings ?? 0}</strong></span>
+        </div>
+      </div>
+      <a class="wd-external" href="${escapeHtml(auctionsUrl)}" target="_blank" rel="noopener">Open on WFM ↗</a>
+    </div>
+
+    ${stats ? `<div class="wd-stats">
+      <div class="wd-stat"><div class="wd-stat-label">Min</div><div class="wd-stat-value">${stats.min}p</div></div>
+      <div class="wd-stat"><div class="wd-stat-label">P25</div><div class="wd-stat-value">${stats.p25}p</div></div>
+      <div class="wd-stat wd-stat-primary"><div class="wd-stat-label">Median</div><div class="wd-stat-value">${stats.median}p</div></div>
+      <div class="wd-stat"><div class="wd-stat-label">P75</div><div class="wd-stat-value">${stats.p75}p</div></div>
+      <div class="wd-stat"><div class="wd-stat-label">P90</div><div class="wd-stat-value">${stats.p90}p</div></div>
+      <div class="wd-stat"><div class="wd-stat-label">Max</div><div class="wd-stat-value">${stats.max}p</div></div>
+    </div>` : `<div class="wd-empty">No live market data cached for this weapon yet.</div>`}
+
+    <div class="wd-section">
+      <div class="wd-section-head"><h3>Live listings that match your filters</h3><span class="small">${opportunities.length} total</span></div>
+      <div class="wd-opps">${opportunitiesHtml}</div>
+    </div>
+
+    <div class="wd-section">
+      <div class="wd-section-head"><h3>Most common stat combos <span class="small">(30-day history)</span></h3><span class="small">${topSignatures.length} known</span></div>
+      <div class="wd-signatures">${signaturesHtml}</div>
+    </div>
+  `;
+
+  for (const el of elements.wdContent.querySelectorAll(".wd-opp")) {
+    el.addEventListener("click", () => {
+      const url = el.getAttribute("data-url");
+      if (url) window.open(url, "_blank", "noopener");
+    });
+  }
+}
+
+function parseSignature(sig) {
+  if (!sig) return [[], []];
+  const [posPart = "", negPart = ""] = sig.split("|");
+  const positives = posPart.split("+").filter(Boolean);
+  const negatives = negPart.split("-").filter(Boolean);
+  return [positives, negatives];
+}
+
+// -------- Weapon browser (now driven by spotlight only, but keep function) --------
+async function loadWeaponBrowser() { /* deprecated; spotlight handles search now */ }
+
+// -------- Filters form --------
 
 function collectConfig() {
   const statuses = [...document.querySelectorAll(".status")].filter((checkbox) => checkbox.checked).map((checkbox) => checkbox.value);
@@ -613,8 +821,7 @@ for (const header of document.querySelectorAll("th[data-sort]")) {
     if (!key) return;
     if (sortState.key === key) sortState = { key, direction: sortState.direction === "asc" ? "desc" : "asc" };
     else sortState = { key, direction: key === "weaponName" ? "asc" : "desc" };
-    if (latestEnrichedOpps.length > 0) renderTable(sortedOpportunities(latestEnrichedOpps));
-    else if (latestState) renderTable(sortedOpportunities(latestState.opportunities));
+    void refreshDerived();
   });
 }
 
@@ -637,13 +844,138 @@ elements.refresh.addEventListener("click", async () => {
   }
 });
 
-if (elements.signatureForm) {
-  elements.signatureForm.addEventListener("submit", submitSignatureLookup);
+// -------- Settings modal (merges data source + MCP) --------
+
+function openSettingsModal(defaultTab = "data") {
+  if (!elements.settingsModal) return;
+  elements.settingsModal.hidden = false;
+  document.body.classList.add("modal-open");
+  switchSettingsTab(defaultTab);
+  populateMcp();
 }
+
+function closeSettingsModal() {
+  if (!elements.settingsModal) return;
+  elements.settingsModal.hidden = true;
+  document.body.classList.remove("modal-open");
+}
+
+function switchSettingsTab(tabName) {
+  for (const tab of elements.settingsTabs) {
+    tab.classList.toggle("active", tab.dataset.settingsTab === tabName);
+  }
+  for (const panel of elements.settingsPanels) {
+    panel.hidden = panel.dataset.settingsPanel !== tabName;
+  }
+}
+
+for (const tab of elements.settingsTabs) {
+  tab.addEventListener("click", () => switchSettingsTab(tab.dataset.settingsTab));
+}
+
+if (elements.settingsButton) {
+  elements.settingsButton.addEventListener("click", () => openSettingsModal("data"));
+}
+if (elements.settingsModal) {
+  elements.settingsModal.addEventListener("click", (event) => {
+    if (event.target instanceof HTMLElement && event.target.dataset.modalClose !== undefined) closeSettingsModal();
+  });
+  elements.settingsModal.querySelectorAll(".mcp-copy").forEach((button) => {
+    button.addEventListener("click", () => {
+      const targetId = button.getAttribute("data-copy-target");
+      const target = targetId ? document.getElementById(targetId) : null;
+      if (target) copyText(target.textContent ?? "", button);
+    });
+  });
+}
+
+function populateMcp() {
+  const origin = window.location.origin;
+  const sseUrl = `${origin}/mcp/sse`;
+  if (elements.mcpEndpoint) elements.mcpEndpoint.textContent = sseUrl;
+  if (elements.mcpConfigDesktop) {
+    elements.mcpConfigDesktop.textContent = JSON.stringify({
+      mcpServers: {
+        "wf-riventrader": {
+          command: "npx",
+          args: ["-y", "mcp-remote", sseUrl],
+        },
+      },
+    }, null, 2);
+  }
+  if (elements.mcpConfigCli) {
+    elements.mcpConfigCli.textContent = `claude mcp add wf-riventrader --transport sse ${sseUrl}`;
+  }
+  if (elements.mcpTestResult) elements.mcpTestResult.textContent = "";
+  void loadMcpToolList();
+}
+
+async function loadMcpToolList() {
+  if (!elements.mcpToolList) return;
+  elements.mcpToolList.innerHTML = `<li class="small">Loading…</li>`;
+  try {
+    const response = await fetch("/api/mcp-info");
+    if (!response.ok) throw new Error(`status ${response.status}`);
+    const info = await response.json();
+    if (!Array.isArray(info.tools) || info.tools.length === 0) {
+      elements.mcpToolList.innerHTML = `<li class="small">No tools registered.</li>`;
+      return;
+    }
+    elements.mcpToolList.innerHTML = info.tools
+      .map((tool) => `<li><strong>${escapeHtml(tool.name)}</strong><div class="small">${escapeHtml(tool.description)}</div></li>`)
+      .join("");
+  } catch (error) {
+    elements.mcpToolList.innerHTML = `<li class="small">Failed: ${escapeHtml(error.message)}</li>`;
+  }
+}
+
+async function testMcpConnection() {
+  if (!elements.mcpTestResult) return;
+  elements.mcpTestResult.textContent = "Opening SSE session…";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 4000);
+  try {
+    const response = await fetch("/mcp/sse", { signal: controller.signal });
+    if (!response.ok || !response.body) throw new Error(`status ${response.status}`);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let sessionOk = false;
+    while (!sessionOk) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value);
+      if (buffer.includes("event: endpoint")) sessionOk = true;
+    }
+    controller.abort();
+    elements.mcpTestResult.innerHTML = sessionOk
+      ? `<span class="good">✓ SSE handshake succeeded — endpoint event received.</span>`
+      : `<span class="warn">Handshake ended without an endpoint event.</span>`;
+  } catch (error) {
+    elements.mcpTestResult.innerHTML = error.name === "AbortError"
+      ? `<span class="good">✓ Session opened.</span>`
+      : `<span class="warn">Handshake failed: ${escapeHtml(error.message)}</span>`;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function copyText(text, button) {
+  try {
+    await navigator.clipboard.writeText(text);
+    const original = button.textContent;
+    button.textContent = "Copied ✓";
+    setTimeout(() => (button.textContent = original), 1600);
+  } catch {
+    button.textContent = "Copy blocked";
+  }
+}
+
+if (elements.mcpTestButton) elements.mcpTestButton.addEventListener("click", testMcpConnection);
 
 // -------- Data source toggle --------
 
-function updateModeUi(activeMode) {
+function updateModeUi(activeMode, state) {
   const normalized = activeMode === "remote" ? "remote" : "tiered";
   for (const button of elements.modeButtons) {
     button.classList.toggle("active", button.dataset.mode === normalized);
@@ -652,6 +984,9 @@ function updateModeUi(activeMode) {
     elements.modeHint.textContent = normalized === "remote"
       ? "Reading the CI-published feed. Refreshes every ~45s; no warframe.market traffic from this browser."
       : "Local tiered scan is active. Uses this machine's IP against warframe.market with a token-bucket limiter.";
+  }
+  if (elements.dataStatusLine && state) {
+    elements.dataStatusLine.innerHTML = `<span class="small">${escapeHtml(state.status.lastMessage ?? "")}</span>`;
   }
 }
 
@@ -678,146 +1013,20 @@ for (const button of elements.modeButtons) {
   });
 }
 
+// -------- SSE --------
+
 const events = new EventSource("/events");
-events.addEventListener("open", () => {
-  elements.sseBadge.textContent = "live";
-  elements.sseBadge.className = "badge good";
-});
 events.addEventListener("state", async (event) => {
   render(JSON.parse(event.data));
   await refreshDerived();
 });
 events.addEventListener("error", () => {
-  elements.sseBadge.textContent = "reconnecting";
-  elements.sseBadge.className = "badge warn";
+  // silently reconnect
 });
 
-loadState().catch((error) => {
-  elements.summary.textContent = error.message;
-});
-setInterval(() => {
-  refreshDerived().catch(() => undefined);
-}, 60_000);
-setInterval(() => {
-  if (elements.weaponSearch && document.activeElement !== elements.weaponSearch) {
-    loadWeaponBrowser(elements.weaponSearch.value.trim());
-  }
-}, 45_000);
+loadState().catch((error) => { elements.summary.textContent = error.message; });
+setInterval(() => { refreshDerived().catch(() => undefined); }, 60_000);
 window.addEventListener("resize", () => {
-  drawChart(latestEnrichedOpps.length > 0 ? latestEnrichedOpps : latestState?.opportunities ?? []);
-});
-
-// -------- MCP connect modal --------
-
-function openMcpModal() {
-  if (!elements.mcpModal) return;
-  const origin = window.location.origin;
-  const sseUrl = `${origin}/mcp/sse`;
-  if (elements.mcpEndpoint) elements.mcpEndpoint.textContent = sseUrl;
-  if (elements.mcpConfigDesktop) {
-    elements.mcpConfigDesktop.textContent = JSON.stringify({
-      mcpServers: {
-        "wf-riventrader": {
-          command: "npx",
-          args: ["-y", "mcp-remote", sseUrl],
-        },
-      },
-    }, null, 2);
-  }
-  if (elements.mcpConfigCli) {
-    elements.mcpConfigCli.textContent = `claude mcp add wf-riventrader --transport sse ${sseUrl}`;
-  }
-  if (elements.mcpTestResult) elements.mcpTestResult.textContent = "";
-  loadMcpToolList();
-  elements.mcpModal.hidden = false;
-  document.body.classList.add("modal-open");
-}
-
-function closeMcpModal() {
-  if (!elements.mcpModal) return;
-  elements.mcpModal.hidden = true;
-  document.body.classList.remove("modal-open");
-}
-
-async function loadMcpToolList() {
-  if (!elements.mcpToolList) return;
-  elements.mcpToolList.innerHTML = `<li class="small">Loading…</li>`;
-  try {
-    const response = await fetch("/api/mcp-info");
-    if (!response.ok) throw new Error(`status ${response.status}`);
-    const info = await response.json();
-    if (!Array.isArray(info.tools) || info.tools.length === 0) {
-      elements.mcpToolList.innerHTML = `<li class="small">No tools registered.</li>`;
-      return;
-    }
-    elements.mcpToolList.innerHTML = info.tools
-      .map((tool) => `<li><strong>${escapeHtml(tool.name)}</strong><div class="small">${escapeHtml(tool.description)}</div></li>`)
-      .join("");
-  } catch (error) {
-    elements.mcpToolList.innerHTML = `<li class="small">Failed to load tools: ${escapeHtml(error.message)}</li>`;
-  }
-}
-
-async function testMcpConnection() {
-  if (!elements.mcpTestResult) return;
-  elements.mcpTestResult.textContent = "Opening SSE session…";
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 4000);
-  try {
-    const response = await fetch("/mcp/sse", { signal: controller.signal });
-    if (!response.ok || !response.body) throw new Error(`status ${response.status}`);
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let sessionOk = false;
-    while (!sessionOk) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value);
-      if (buffer.includes("event: endpoint")) sessionOk = true;
-    }
-    controller.abort();
-    if (sessionOk) {
-      elements.mcpTestResult.innerHTML = `<span class="good">✓ SSE handshake succeeded — endpoint event received.</span>`;
-    } else {
-      elements.mcpTestResult.innerHTML = `<span class="warn">Handshake ended without an endpoint event.</span>`;
-    }
-  } catch (error) {
-    if (error.name === "AbortError") {
-      elements.mcpTestResult.innerHTML = `<span class="good">✓ Session opened.</span>`;
-    } else {
-      elements.mcpTestResult.innerHTML = `<span class="warn">Handshake failed: ${escapeHtml(error.message)}</span>`;
-    }
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function copyText(text, button) {
-  try {
-    await navigator.clipboard.writeText(text);
-    const original = button.textContent;
-    button.textContent = "Copied ✓";
-    setTimeout(() => (button.textContent = original), 1600);
-  } catch {
-    button.textContent = "Copy blocked";
-  }
-}
-
-if (elements.mcpButton) elements.mcpButton.addEventListener("click", openMcpModal);
-if (elements.mcpModal) {
-  elements.mcpModal.addEventListener("click", (event) => {
-    if (event.target instanceof HTMLElement && event.target.dataset.modalClose !== undefined) closeMcpModal();
-  });
-  elements.mcpModal.querySelectorAll(".mcp-copy").forEach((button) => {
-    button.addEventListener("click", () => {
-      const targetId = button.getAttribute("data-copy-target");
-      const target = targetId ? document.getElementById(targetId) : null;
-      if (target) copyText(target.textContent ?? "", button);
-    });
-  });
-}
-if (elements.mcpTestButton) elements.mcpTestButton.addEventListener("click", testMcpConnection);
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && elements.mcpModal && !elements.mcpModal.hidden) closeMcpModal();
+  const source = applySpotlightFilter(latestEnrichedOpps.length > 0 ? latestEnrichedOpps : latestState?.opportunities ?? []);
+  drawChart(source);
 });

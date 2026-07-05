@@ -7,54 +7,111 @@
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <header class="app-header">
-    <div class="brand">
-      <span class="brand-mark">WF-RivenTrader</span>
-      <span id="sseBadge" class="badge warn">connecting</span>
+  <div id="spotlightOverlay" class="spotlight-overlay" hidden>
+    <div class="spotlight-backdrop" data-spotlight-close></div>
+    <div id="spotlight" class="spotlight">
+      <svg class="spotlight-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <circle cx="8.5" cy="8.5" r="5.5" />
+        <path d="M17 17l-4.5-4.5" />
+      </svg>
+      <input id="spotlightInput" type="search" placeholder="Search weapons, filter by price (e.g. dark sword &lt; 100p)…" autocomplete="off" spellcheck="false" />
+      <div id="spotlightResults" class="spotlight-results" hidden></div>
     </div>
-    <div class="header-actions">
-      <span id="scanBadge" class="badge">scan idle</span>
-      <button id="mcpConnectButton" class="badge badge-button" type="button" title="Show MCP client config">Connect MCP ↗</button>
-    </div>
-  </header>
+  </div>
+  <div id="topBar" class="topbar">
+    <div class="topbar-inner">
+      <div class="topbar-left">
+        <span class="brand-mark">WF-RivenTrader</span>
+      </div>
 
-  <div id="mcpModal" class="modal" hidden>
+      <div class="topbar-center">
+        <button id="spotlightTrigger" class="spotlight-trigger" type="button">
+          <svg class="spotlight-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <circle cx="8.5" cy="8.5" r="5.5" />
+            <path d="M17 17l-4.5-4.5" />
+          </svg>
+          <span class="spotlight-trigger-text">Search weapons, filter by price…</span>
+        </button>
+      </div>
+
+      <div class="topbar-right">
+        <button id="settingsButton" class="icon-button" type="button" aria-label="Settings" title="Settings">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="10" cy="10" r="3" />
+            <path d="M17.5 10a7.5 7.5 0 0 0-.14-1.44l1.6-1.24-1.9-3.3-1.87.79a7.5 7.5 0 0 0-2.5-1.44L12.4 1.5h-4.8l-.29 1.87a7.5 7.5 0 0 0-2.5 1.44l-1.87-.79-1.9 3.3 1.6 1.24A7.5 7.5 0 0 0 2.5 10c0 .49.05.97.14 1.44l-1.6 1.24 1.9 3.3 1.87-.79a7.5 7.5 0 0 0 2.5 1.44l.29 1.87h4.8l.29-1.87a7.5 7.5 0 0 0 2.5-1.44l1.87.79 1.9-3.3-1.6-1.24c.09-.47.14-.95.14-1.44Z" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings modal -->
+  <div id="settingsModal" class="modal" hidden>
     <div class="modal-backdrop" data-modal-close></div>
-    <div class="modal-dialog panel">
+    <div class="modal-dialog panel settings-dialog">
       <button class="modal-close" data-modal-close type="button" aria-label="Close">×</button>
-      <h2>Connect an MCP client</h2>
-      <p class="small">Point Claude Desktop, Claude Code, or any MCP-aware client at the SSE endpoint below. Tools include live opportunities, trait valuations, instant-wins, and a health probe.</p>
-
-      <div class="mcp-block">
-        <div class="mcp-block-head"><h3>SSE endpoint</h3><button class="mcp-copy" data-copy-target="mcpEndpoint" type="button">Copy</button></div>
-        <code id="mcpEndpoint" class="mcp-endpoint"></code>
+      <h2>Settings</h2>
+      <div class="settings-tabs">
+        <button class="settings-tab active" data-settings-tab="data">Data source</button>
+        <button class="settings-tab" data-settings-tab="mcp">MCP connect</button>
+        <button class="settings-tab" data-settings-tab="about">About</button>
       </div>
 
-      <div class="mcp-block">
-        <div class="mcp-block-head"><h3>Claude Desktop <span class="small">(via mcp-remote proxy)</span></h3><button class="mcp-copy" data-copy-target="mcpConfigDesktop" type="button">Copy config</button></div>
-        <p class="small">Paste into <code>%APPDATA%\Claude\claude_desktop_config.json</code> (Windows) or <code>~/Library/Application Support/Claude/claude_desktop_config.json</code> (macOS), then restart Claude Desktop.</p>
-        <pre><code id="mcpConfigDesktop"></code></pre>
+      <div class="settings-panel" data-settings-panel="data">
+        <div class="mode-toggle" style="border:0;padding:0;margin:0">
+          <div class="mode-title">Where should the dashboard get data?</div>
+          <div class="mode-buttons" role="tablist">
+            <button type="button" class="mode-btn" data-mode="tiered">Local scan</button>
+            <button type="button" class="mode-btn" data-mode="remote">CI feed</button>
+          </div>
+          <div id="modeHint" class="mode-hint">Local scan runs warframe.market fetches from this machine. CI feed reads the shared feed published by GitHub Actions.</div>
+        </div>
+        <div class="settings-status" id="dataStatusLine"></div>
       </div>
 
-      <div class="mcp-block">
-        <div class="mcp-block-head"><h3>Claude Code CLI</h3><button class="mcp-copy" data-copy-target="mcpConfigCli" type="button">Copy command</button></div>
-        <pre><code id="mcpConfigCli"></code></pre>
+      <div class="settings-panel" data-settings-panel="mcp" hidden>
+        <p class="small">Point Claude Desktop, Claude Code, or any MCP-aware client at the endpoint below to get live opportunities, trait valuations, instant-wins, and a health probe.</p>
+        <div class="mcp-block">
+          <div class="mcp-block-head"><h3>SSE endpoint</h3><button class="mcp-copy" data-copy-target="mcpEndpoint" type="button">Copy</button></div>
+          <code id="mcpEndpoint" class="mcp-endpoint"></code>
+        </div>
+        <div class="mcp-block">
+          <div class="mcp-block-head"><h3>Claude Desktop</h3><button class="mcp-copy" data-copy-target="mcpConfigDesktop" type="button">Copy config</button></div>
+          <p class="small">Paste into <code>%APPDATA%\Claude\claude_desktop_config.json</code> (Win) or <code>~/Library/Application Support/Claude/claude_desktop_config.json</code> (macOS), then restart Claude Desktop.</p>
+          <pre><code id="mcpConfigDesktop"></code></pre>
+        </div>
+        <div class="mcp-block">
+          <div class="mcp-block-head"><h3>Claude Code CLI</h3><button class="mcp-copy" data-copy-target="mcpConfigCli" type="button">Copy command</button></div>
+          <pre><code id="mcpConfigCli"></code></pre>
+        </div>
+        <div class="mcp-block">
+          <div class="mcp-block-head"><h3>Available tools</h3><button id="mcpTestButton" class="secondary" type="button">Test connection</button></div>
+          <div id="mcpTestResult" class="small"></div>
+          <ul id="mcpToolList" class="mcp-tool-list"></ul>
+        </div>
       </div>
 
-      <div class="mcp-block">
-        <div class="mcp-block-head"><h3>Available tools</h3><button id="mcpTestButton" class="secondary" type="button">Test connection</button></div>
-        <div id="mcpTestResult" class="small"></div>
-        <ul id="mcpToolList" class="mcp-tool-list"></ul>
+      <div class="settings-panel" data-settings-panel="about" hidden>
+        <p class="small">WF-RivenTrader is an open-source server-side Warframe.market riven arbitrage scanner. Data lives in a public GitHub branch, weapon images come from the community warframestat.us CDN.</p>
+        <p class="small">Profit numbers are median-based over trimmed comparables — outlier listings can't inflate expected returns.</p>
+        <p class="small">Source: <a href="https://github.com/ck0i/WF-RivenTrader" target="_blank" style="color:var(--accent)">github.com/ck0i/WF-RivenTrader</a></p>
       </div>
+    </div>
+  </div>
+
+  <!-- Weapon detail modal -->
+  <div id="weaponModal" class="modal" hidden>
+    <div class="modal-backdrop" data-modal-close></div>
+    <div class="modal-dialog panel weapon-detail-dialog">
+      <button class="modal-close" data-modal-close type="button" aria-label="Close">×</button>
+      <div id="wdContent" class="wd-content"></div>
     </div>
   </div>
 
   <main>
     <!-- Hero: top opportunity right now -->
     <section id="heroDeal" class="hero-deal panel" hidden>
-      <div class="hero-thumb-wrap">
-        <div id="heroThumb"></div>
-      </div>
+      <div class="hero-thumb-wrap"><div id="heroThumb"></div></div>
       <div class="hero-body">
         <div class="hero-eyebrow">Top deal right now <span class="hero-rank">#1</span></div>
         <div class="hero-title"><span id="heroWeapon"></span> <span id="heroTier" class="tier-badge"></span></div>
@@ -76,7 +133,7 @@
       </div>
     </section>
 
-    <!-- Meta strip: single-line diagnostics -->
+    <!-- Compact meta strip -->
     <div id="metaStrip" class="meta-strip">
       <span class="meta-item"><span id="statOpps">0</span> opportunities</span>
       <span class="meta-dot">·</span>
@@ -84,22 +141,12 @@
       <span class="meta-dot">·</span>
       <span class="meta-item"><span id="statAuctions">0</span> live auctions</span>
       <span class="meta-dot">·</span>
-      <span class="meta-item"><span id="statRefresh">—</span> updated</span>
+      <span class="meta-item">updated <span id="statRefresh">—</span></span>
       <span id="statWeaponsSub" class="meta-sub"></span>
     </div>
 
     <div class="grid">
-      <!-- Sidebar -->
       <aside class="panel controls">
-        <div class="mode-toggle">
-          <div class="mode-title">Data source</div>
-          <div class="mode-buttons" role="tablist">
-            <button type="button" class="mode-btn" data-mode="tiered">Local scan</button>
-            <button type="button" class="mode-btn" data-mode="remote">CI feed</button>
-          </div>
-          <div id="modeHint" class="mode-hint">Local scan runs warframe.market fetches from this machine. CI feed reads the shared state.json published by the GitHub Actions scanner.</div>
-        </div>
-
         <details class="section" open>
           <summary><h2>Filters</h2></summary>
           <form id="filters">
@@ -133,11 +180,11 @@
             <label>Max results
               <input id="maxResults" type="number" min="5" max="500" step="5" value="75" />
             </label>
-            <div class="small" style="margin-bottom:4px">Seller status</div>
-            <div class="checks">
-              <label><input class="status" type="checkbox" value="ingame" checked />ingame</label>
-              <label><input class="status" type="checkbox" value="online" checked />online</label>
-              <label><input class="status" type="checkbox" value="offline" />offline</label>
+            <div class="small" style="margin-bottom:6px">Seller status</div>
+            <div class="status-chips">
+              <label class="status-chip"><input class="status" type="checkbox" value="ingame" checked /><span>ingame</span></label>
+              <label class="status-chip"><input class="status" type="checkbox" value="online" checked /><span>online</span></label>
+              <label class="status-chip"><input class="status" type="checkbox" value="offline" /><span>offline</span></label>
             </div>
             <div class="actions">
               <button id="apply" type="submit">Apply</button>
@@ -145,36 +192,16 @@
             </div>
           </form>
         </details>
-
-        <details class="section">
-          <summary><h2>Weapon browser</h2></summary>
-          <p class="small">Search all riven weapons.</p>
-          <input id="weaponSearch" class="search-input" type="search" placeholder="bramma, kuva, melee…" autocomplete="off" />
-          <div id="weaponResults" class="weapon-results"><div class="small">Loading…</div></div>
-        </details>
-
-        <details class="section">
-          <summary><h2>Trait lookup</h2></summary>
-          <p class="small">What does a riven with these stats normally sell for?</p>
-          <form id="signatureForm">
-            <label>Weapon slug<input id="sigWeapon" type="text" placeholder="e.g. war" /></label>
-            <label>Positives<textarea id="sigPositives" placeholder="critical_chance&#10;critical_damage"></textarea></label>
-            <label>Negatives<textarea id="sigNegatives" placeholder="zoom"></textarea></label>
-            <button id="sigSubmit" type="submit">Look up</button>
-          </form>
-          <div id="sigResult" class="sig-result small">No lookup yet.</div>
-        </details>
       </aside>
 
       <section class="content">
-        <!-- Main deals table -->
         <section class="panel table-panel">
           <div class="table-head">
             <div>
               <h2>Buy-low / sell-high queue</h2>
               <p id="summary">Waiting for the first scan.</p>
             </div>
-            <div id="statBest" class="best-badge" title="Highest single-deal profit right now"></div>
+            <div id="statBest" class="best-badge"></div>
           </div>
           <div class="table-wrap">
             <table>
@@ -194,7 +221,6 @@
           </div>
         </section>
 
-        <!-- Instant wins (hidden when empty) -->
         <section id="instantWinsPanel" class="panel instant-wins" hidden>
           <div class="table-head">
             <div>
@@ -205,7 +231,6 @@
           <div id="instantList" class="instant-list"></div>
         </section>
 
-        <!-- Chart: supporting context, below fold -->
         <section class="panel chart-panel">
           <div class="section-head">
             <div>
@@ -227,14 +252,14 @@
         </section>
 
         <section class="weapons-section">
-          <h2>Weapon markets</h2>
+          <h2>Weapon markets <span class="section-hint small">click any card for the full detail</span></h2>
           <div id="weapons" class="weapons"></div>
         </section>
       </section>
     </div>
   </main>
 
-  <footer><small>Data via public warframe.market endpoints + warframestat.us CDN. Server-side rate-limited. Dashboard polls when in CI feed mode; live SSE otherwise.</small></footer>
+  <footer><small>Data via public warframe.market endpoints + warframestat.us CDN. Server-side rate-limited. Profit is median-based over outlier-trimmed comparables.</small></footer>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

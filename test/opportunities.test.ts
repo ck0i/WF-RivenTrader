@@ -101,7 +101,9 @@ assert(exact, "exact opportunity missing");
 assert.equal(exact.groupType, "exact-stats");
 assert.equal(exact.targetSellPrice, 210);
 assert.equal(exact.conservativeSellPrice, 165);
-assert.equal(exact.expectedProfit, 160);
+// Profit is now median-based (p50 - buy) rather than aggressive (p75 - buy)
+// so a lone high-price outlier can't inflate expected returns.
+assert.equal(exact.expectedProfit, 115);
 assert.equal(exact.buyToSellRatio, 4.2);
 assert.equal(exact.status, "ingame");
 
