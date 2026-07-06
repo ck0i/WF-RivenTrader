@@ -276,6 +276,160 @@ const signatureValueDataSchema: Record<string, unknown> = {
   },
 };
 
+const priceStatsJsonSchema: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    count: { type: "integer" },
+    min: { type: "number" },
+    p25: { type: "number" },
+    median: { type: "number" },
+    p75: { type: "number" },
+    p90: { type: "number" },
+    max: { type: "number" },
+  },
+};
+
+const arcaneRankMarketJsonSchema: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    rank: { type: "integer" },
+    sell: { anyOf: [priceStatsJsonSchema, { type: "null" }] },
+    buy: { anyOf: [priceStatsJsonSchema, { type: "null" }] },
+    sellOrderCount: { type: "integer" },
+    buyOrderCount: { type: "integer" },
+    onlineSellOrderCount: { type: "integer" },
+    onlineBuyOrderCount: { type: "integer" },
+    totalSellQuantity: { type: "integer" },
+    totalBuyQuantity: { type: "integer" },
+  },
+};
+
+const arcaneMarketSummaryJsonSchema: Record<string, unknown> = {
+  type: "object",
+  required: ["slug", "name", "rarity", "rank0", "url"],
+  properties: {
+    slug: { type: "string" },
+    name: { type: "string" },
+    rarity: { enum: ["common", "uncommon", "rare", "legendary", "unknown"] },
+    maxRank: { type: "integer" },
+    listings: { type: "integer" },
+    sellListings: { type: "integer" },
+    buyListings: { type: "integer" },
+    onlineSellListings: { type: "integer" },
+    onlineBuyListings: { type: "integer" },
+    rank0: arcaneRankMarketJsonSchema,
+    rankMax: arcaneRankMarketJsonSchema,
+    dissolutionVosfor: { type: "number" },
+    icon: { type: "string" },
+    thumb: { type: "string" },
+    imageName: { type: "string" },
+    lastScannedAt: { type: "string" },
+    priceVsVosfor: {
+      type: "object",
+      properties: {
+        rank: { type: "integer" },
+        sellPrice: { type: "number" },
+        platinumPerVosfor: { type: "number" },
+      },
+    },
+    url: { type: "string" },
+  },
+};
+
+const arcanePackDropJsonSchema: Record<string, unknown> = {
+  type: "object",
+  required: ["arcaneSlug", "arcaneName", "chance", "expectedPlat"],
+  properties: {
+    arcaneSlug: { type: "string" },
+    arcaneName: { type: "string" },
+    rarity: { enum: ["common", "uncommon", "rare", "legendary"] },
+    chance: { type: "number" },
+    rank: { type: "integer" },
+    priceUsed: { type: ["number", "null"] },
+    dissolutionVosfor: { type: "number" },
+    expectedCopies: { type: "number" },
+    expectedPlat: { type: "number" },
+    expectedVosfor: { type: ["number", "null"] },
+    sourcePrice: { type: "string" },
+  },
+};
+
+const arcanePackJsonSchema: Record<string, unknown> = {
+  type: "object",
+  required: ["packId", "packName", "expectedPlat", "expectedPlatPerVosfor", "confidence", "topDrops"],
+  properties: {
+    packId: { type: "string" },
+    packName: { type: "string" },
+    costVosfor: { type: "number" },
+    creditCost: { type: "number" },
+    rewardsPerPack: { type: "number" },
+    expectedPlat: { type: "number" },
+    expectedPlatPerVosfor: { type: "number" },
+    expectedVosforReturn: { type: "number" },
+    netVosforBurn: { type: "number" },
+    coveragePct: { type: "number" },
+    confidence: { type: "number", minimum: 0, maximum: 1 },
+    missingPriceCount: { type: "integer" },
+    pricedDropCount: { type: "integer" },
+    topDrops: { type: "array", items: arcanePackDropJsonSchema },
+    source: { type: "string" },
+    notes: { type: "array", items: { type: "string" } },
+  },
+};
+
+const arcaneDissolveRecommendationJsonSchema: Record<string, unknown> = {
+  type: "object",
+  required: ["slug", "name", "action", "deltaPlat", "confidence"],
+  properties: {
+    slug: { type: "string" },
+    name: { type: "string" },
+    rank: { type: "integer" },
+    sellPrice: { type: "number" },
+    dissolutionVosfor: { type: "number" },
+    bestPackId: { type: "string" },
+    bestPackName: { type: "string" },
+    estimatedRollValue: { type: "number" },
+    sellValuePerVosfor: { type: "number" },
+    rollValuePerVosfor: { type: "number" },
+    deltaPlat: { type: "number" },
+    action: { enum: ["dissolve", "sell", "hold"] },
+    confidence: { type: "number", minimum: 0, maximum: 1 },
+    reasons: { type: "array", items: { type: "string" } },
+    url: { type: "string" },
+    imageName: { type: "string" },
+  },
+};
+
+const arcaneDetailDataSchema: Record<string, unknown> = {
+  anyOf: [
+    { type: "null" },
+    {
+      type: "object",
+      properties: {
+        summary: arcaneMarketSummaryJsonSchema,
+        recommendation: { anyOf: [arcaneDissolveRecommendationJsonSchema, { type: "null" }] },
+        topPackDrops: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              packId: { type: "string" },
+              packName: { type: "string" },
+              chance: { type: "number" },
+              expectedCopies: { type: "number" },
+              expectedPlat: { type: "number" },
+              expectedVosfor: { type: ["number", "null"] },
+              priceUsed: { type: ["number", "null"] },
+              confidence: { type: "number" },
+            },
+          },
+        },
+        ordersUrl: { type: "string" },
+      },
+    },
+  ],
+};
+
 export const outputSchemas = {
   snapshot: envelopeJsonSchema({
     type: "object",
@@ -318,4 +472,17 @@ export const outputSchemas = {
       },
     },
   }),
+  arcanePacks: envelopeJsonSchema({
+    type: "array",
+    items: arcanePackJsonSchema,
+  }),
+  arcaneDissolveRecommendations: envelopeJsonSchema({
+    type: "array",
+    items: arcaneDissolveRecommendationJsonSchema,
+  }),
+  arcaneMarket: envelopeJsonSchema({
+    type: "array",
+    items: arcaneMarketSummaryJsonSchema,
+  }),
+  arcaneDetail: envelopeJsonSchema(arcaneDetailDataSchema),
 };

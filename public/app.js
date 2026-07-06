@@ -38,7 +38,6 @@ const elements = {
   minBuyPrice: document.getElementById("minBuyPrice"),
   maxBuyPrice: document.getElementById("maxBuyPrice"),
   maxSellPrice: document.getElementById("maxSellPrice"),
-  maxResults: document.getElementById("maxResults"),
   instantWinsPanel: document.getElementById("instantWinsPanel"),
   instantList: document.getElementById("instantList"),
   instantPreview: document.getElementById("instantPreview"),
@@ -100,6 +99,11 @@ let spotlightFilter = null;
 let currentPage = "home";
 let expandedOpportunityKey = null;
 let copiedOpportunityKey = null;
+let opportunityRenderToken = 0;
+let opportunityRenderIdleHandle = null;
+let heatmapVisibleCount = 9;
+let arcaneDissolveVisibleCount = 6;
+
 
 const SIGNAL_PRIORITY = [
   "undervalued_signature",
@@ -115,6 +119,11 @@ const SIGNAL_PRIORITY = [
 ];
 
 const TIER_COLORS = { A: "#4ade80", B: "#38bdf8", C: "#fbbf24", D: "#f87171" };
+
+const RESULT_BUDGETS = browserResultBudgets();
+const IDLE_RENDER_TIMEOUT_MS = 80;
+const HEATMAP_SHOW_MORE_BATCH = 9;
+const ARCANE_DISSOLVE_SHOW_MORE_BATCH = 6;
 
 const MODE_HINTS = {
   remote: "Reading the CI-published feed. Refreshes without browser-side Warframe.market traffic.",
@@ -189,7 +198,7 @@ function render(state) {
   const covered = state.totals?.weaponsWithAuctions ?? 0;
   const best = (state.opportunities ?? []).reduce((winner, opportunity) => !winner || opportunity.expectedProfit > winner.expectedProfit ? opportunity : winner, null);
 
-  if (elements.statOpps) elements.statOpps.textContent = formatNumber(state.totals?.opportunities ?? 0);
+  if (elements.statOpps) elements.statOpps.textContent = formatNumber(Math.max(state.totals?.opportunities ?? 0, (state.opportunities ?? []).length));
   if (elements.statWeapons) elements.statWeapons.textContent = `${formatNumber(covered)}/${formatNumber(totalRefWeapons)}`;
   if (elements.statWeaponsSub) {
     const running = state.status?.running;
@@ -239,7 +248,6 @@ function hydrateControls(state) {
   elements.minBuyPrice.value = state.config?.minBuyPrice == null ? "" : state.config.minBuyPrice;
   elements.maxBuyPrice.value = state.config?.maxBuyPrice == null ? "" : state.config.maxBuyPrice;
   elements.maxSellPrice.value = state.config?.maxSellPrice == null ? "" : state.config.maxSellPrice;
-  elements.maxResults.value = state.config?.maxResults ?? 75;
   for (const checkbox of document.querySelectorAll(".status")) checkbox.checked = (state.config?.statuses ?? []).includes(checkbox.value);
 }
 
@@ -320,8 +328,59 @@ function signalChip(signal) {
   return `<span class="signal signal-${escapeHtml(signal)}">${escapeHtml(signal.replace(/_/g, " "))}</span>`;
 }
 
+function browserResultBudgets() {
+  const memory = Number(navigator.deviceMemory ?? 4);
+  const cores = Number(navigator.hardwareConcurrency ?? 4);
+  const constrained = (memory > 0 && memory <= 2) || (cores > 0 && cores <= 2);
+  const highCapacity = memory >= 8 && cores >= 8;
+  return {
+    opportunityInitial: constrained ? 90 : highCapacity ? 240 : 160,
+    opportunityBatch: constrained ? 60 : highCapacity ? 180 : 100,
+    opportunityCards: constrained ? 500 : highCapacity ? 2400 : 1200,
+    chartPoints: constrained ? 1200 : highCapacity ? 8000 : 3500,
+    arcaneCards: constrained ? 16 : highCapacity ? 64 : 32,
+    arcaneRecommendations: constrained ? 300 : highCapacity ? 1600 : 900,
+    arcaneRows: constrained ? 350 : highCapacity ? 1800 : 1000,
+    weaponCards: constrained ? 300 : highCapacity ? 1200 : 700,
+    heatmapCards: constrained ? 48 : highCapacity ? 160 : 96,
+    weaponDetailOpportunities: constrained ? 24 : 50,
+  };
+}
+
+function scheduleIdleRender(callback) {
+  if (typeof window.requestIdleCallback === "function") return window.requestIdleCallback(callback, { timeout: IDLE_RENDER_TIMEOUT_MS });
+  return window.setTimeout(() => callback({ didTimeout: true, timeRemaining: () => 0 }), 16);
+}
+
+function cancelIdleRender(handle) {
+  if (handle == null) return;
+  if (typeof window.cancelIdleCallback === "function") window.cancelIdleCallback(handle);
+  else window.clearTimeout(handle);
+}
+
+function resultLimitNote(label, shown, total) {
+  if (shown >= total) return "";
+  return `<div class="result-limit-note">Showing ${formatNumber(shown)} of ${formatNumber(total)} ${escapeHtml(label)}. Narrow search or filters to inspect the rest without overloading the browser.</div>`;
+}
+
+function chartRenderItems(opportunities) {
+  if (!Array.isArray(opportunities)) return [];
+  if (opportunities.length <= RESULT_BUDGETS.chartPoints) return opportunities;
+  const sampled = [];
+  const step = opportunities.length / RESULT_BUDGETS.chartPoints;
+  for (let index = 0; index < RESULT_BUDGETS.chartPoints; index += 1) {
+    const item = opportunities[Math.floor(index * step)];
+    if (item) sampled.push(item);
+  }
+  return sampled;
+}
+
+
 function renderOpportunities(opportunities) {
   if (!elements.opps) return;
+  cancelIdleRender(opportunityRenderIdleHandle);
+  opportunityRenderIdleHandle = null;
+  const renderToken = ++opportunityRenderToken;
   elements.opps.textContent = "";
   if (opportunities.length === 0) {
     elements.opps.innerHTML = `<div class="empty-state">No opportunities match. Adjust filters, clear the search, or wait for the next scan.</div>`;
@@ -329,49 +388,75 @@ function renderOpportunities(opportunities) {
     return;
   }
 
-  for (const [index, opportunity] of opportunities.entries()) {
-    const key = opportunityKey(opportunity);
-    const tier = opportunity.quality?.tier ?? tierFromScore(opportunity.score);
-    const expanded = expandedOpportunityKey === key;
-    const topSignals = topSignalsFor(opportunity, 3);
-    const positives = (opportunity.positives ?? []).slice(0, 4).map((p) => `<span class="flag good">+${escapeHtml(p)}</span>`).join("");
-    const negatives = (opportunity.negatives ?? []).slice(0, 2).map((n) => `<span class="flag bad">-${escapeHtml(n)}</span>`).join("");
-    const card = document.createElement("article");
-    card.className = `opp-card tier-${tier}${expanded ? " expanded" : ""}`;
-    card.dataset.key = key;
-    card.innerHTML = `
-      <button class="opp-row" type="button" data-action="toggle" title="${escapeHtml(opportunity.seller?.ingameName ?? "seller")} · ${escapeHtml(opportunity.status)} · ${opportunity.comparableListings} comparables · score ${Math.round(opportunity.score ?? 0)}">
-        <span class="opp-rank">${String(index + 1).padStart(2, "0")}</span>
-        <span class="opp-main" data-action="weapon" data-weapon-slug="${escapeHtml(opportunity.weaponSlug)}">
-          ${weaponThumb(opportunity.imageName, opportunity.weaponName, "sm")}
-          <span class="opp-title"><strong>${escapeHtml(opportunity.weaponName)}</strong><span>${escapeHtml(opportunity.rivenName)}</span></span>
-        </span>
-        <span class="opp-metric"><span>Buy</span><strong class="buy">${opportunity.buyPrice}◈</strong></span>
-        <span class="opp-metric"><span>Sell</span><strong class="sell">${opportunity.conservativeSellPrice ?? opportunity.targetSellPrice}◈</strong></span>
-        <span class="opp-metric"><span>Profit</span><strong class="profit">+${opportunity.expectedProfit}◈</strong></span>
-        <span class="opp-metric"><span>ROI</span><strong class="roi">${Math.round((opportunity.roi ?? 0) * 100)}%</strong></span>
-        <span class="opp-metric"><span>Conf</span>${confidenceBar(opportunity.confidence ?? 0)}</span>
-        <span class="opp-age">${timeAgo(opportunity.updated)}</span>
-        <span class="opp-chevron">⌄</span>
-      </button>
-      ${expanded ? `<div class="opp-detail">
-        <div>
-          <h3>Signals and listing context</h3>
-          <div class="signals">${topSignals.map(signalChip).join("") || `<span class="signal">no quality flags</span>`}</div>
-          <div class="opp-flags">${positives}${negatives}<span class="tier-badge tier-${tier}">${tier}</span><span class="chip">${escapeHtml(opportunity.groupType)}</span><span class="chip">${opportunity.comparableListings} comps</span><span class="chip">seller ${escapeHtml(opportunity.seller?.ingameName ?? "unknown")}</span><span class="chip">${escapeHtml(opportunity.status)}</span></div>
-          <p class="small">Median target ${opportunity.conservativeSellPrice ?? opportunity.targetSellPrice}◈ · p75 aggressive ${opportunity.targetSellPrice}◈ · score ${Math.round(opportunity.score ?? 0)}/100 · confidence ${Math.round((opportunity.confidence ?? 0) * 100)}%.</p>
-        </div>
-        <div class="opp-actions">
-          <button class="primary-button" type="button" data-action="open">Open on WFM ↗</button>
-          <button class="ghost-button" type="button" data-action="weapon" data-weapon-slug="${escapeHtml(opportunity.weaponSlug)}">Open weapon detail</button>
-          <button class="ghost-button" type="button" data-action="copy">${copiedOpportunityKey === key ? "Copied ✓" : "Copy /w to seller"}</button>
-        </div>
-      </div>` : ""}
-    `;
-    card.addEventListener("click", (event) => handleOpportunityClick(event, opportunity));
-    elements.opps.appendChild(card);
-  }
+  const total = opportunities.length;
+  const renderLimit = Math.min(total, RESULT_BUDGETS.opportunityCards);
+  let cursor = 0;
+  const appendBatch = (deadline, firstBatch = false) => {
+    if (renderToken !== opportunityRenderToken) return;
+    const fragment = document.createDocumentFragment();
+    const batchTarget = firstBatch ? RESULT_BUDGETS.opportunityInitial : RESULT_BUDGETS.opportunityBatch;
+    let appended = 0;
+    while (cursor < renderLimit && appended < batchTarget) {
+      if (!firstBatch && appended > 12 && !deadline.didTimeout && deadline.timeRemaining() < 3) break;
+      fragment.appendChild(createOpportunityCard(opportunities[cursor], cursor));
+      cursor += 1;
+      appended += 1;
+    }
+    elements.opps.appendChild(fragment);
+    if (cursor < renderLimit) {
+      opportunityRenderIdleHandle = scheduleIdleRender((nextDeadline) => appendBatch(nextDeadline, false));
+      return;
+    }
+    opportunityRenderIdleHandle = null;
+    const note = resultLimitNote("opportunities", renderLimit, total);
+    if (note) elements.opps.insertAdjacentHTML("beforeend", note);
+  };
+
+  appendBatch({ didTimeout: true, timeRemaining: () => 0 }, true);
   updateSortControls();
+}
+
+function createOpportunityCard(opportunity, index) {
+  const key = opportunityKey(opportunity);
+  const tier = opportunity.quality?.tier ?? tierFromScore(opportunity.score);
+  const expanded = expandedOpportunityKey === key;
+  const topSignals = topSignalsFor(opportunity, 3);
+  const positives = (opportunity.positives ?? []).slice(0, 4).map((p) => `<span class="flag good">+${escapeHtml(p)}</span>`).join("");
+  const negatives = (opportunity.negatives ?? []).slice(0, 2).map((n) => `<span class="flag bad">-${escapeHtml(n)}</span>`).join("");
+  const card = document.createElement("article");
+  card.className = `opp-card tier-${tier}${expanded ? " expanded" : ""}`;
+  card.dataset.key = key;
+  card.innerHTML = `
+    <button class="opp-row" type="button" data-action="toggle" title="${escapeHtml(opportunity.seller?.ingameName ?? "seller")} · ${escapeHtml(opportunity.status)} · ${opportunity.comparableListings} comparables · score ${Math.round(opportunity.score ?? 0)}">
+      <span class="opp-rank">${String(index + 1).padStart(2, "0")}</span>
+      <span class="opp-main" data-action="weapon" data-weapon-slug="${escapeHtml(opportunity.weaponSlug)}">
+        ${weaponThumb(opportunity.imageName, opportunity.weaponName, "sm")}
+        <span class="opp-title"><strong>${escapeHtml(opportunity.weaponName)}</strong><span>${escapeHtml(opportunity.rivenName)}</span></span>
+      </span>
+      <span class="opp-metric"><span>Buy</span><strong class="buy">${opportunity.buyPrice}◈</strong></span>
+      <span class="opp-metric"><span>Sell</span><strong class="sell">${opportunity.conservativeSellPrice ?? opportunity.targetSellPrice}◈</strong></span>
+      <span class="opp-metric"><span>Profit</span><strong class="profit">+${opportunity.expectedProfit}◈</strong></span>
+      <span class="opp-metric"><span>ROI</span><strong class="roi">${Math.round((opportunity.roi ?? 0) * 100)}%</strong></span>
+      <span class="opp-metric"><span>Conf</span>${confidenceBar(opportunity.confidence ?? 0)}</span>
+      <span class="opp-age">${timeAgo(opportunity.updated)}</span>
+      <span class="opp-chevron">⌄</span>
+    </button>
+    ${expanded ? `<div class="opp-detail">
+      <div>
+        <h3>Signals and listing context</h3>
+        <div class="signals">${topSignals.map(signalChip).join("") || `<span class="signal">no quality flags</span>`}</div>
+        <div class="opp-flags">${positives}${negatives}<span class="tier-badge tier-${tier}">${tier}</span><span class="chip">${escapeHtml(opportunity.groupType)}</span><span class="chip">${opportunity.comparableListings} comps</span><span class="chip">seller ${escapeHtml(opportunity.seller?.ingameName ?? "unknown")}</span><span class="chip">${escapeHtml(opportunity.status)}</span></div>
+        <p class="small">Median target ${opportunity.conservativeSellPrice ?? opportunity.targetSellPrice}◈ · p75 aggressive ${opportunity.targetSellPrice}◈ · score ${Math.round(opportunity.score ?? 0)}/100 · confidence ${Math.round((opportunity.confidence ?? 0) * 100)}%.</p>
+      </div>
+      <div class="opp-actions">
+        <button class="primary-button" type="button" data-action="open">Open on WFM ↗</button>
+        <button class="ghost-button" type="button" data-action="weapon" data-weapon-slug="${escapeHtml(opportunity.weaponSlug)}">Open weapon detail</button>
+        <button class="ghost-button" type="button" data-action="copy">${copiedOpportunityKey === key ? "Copied ✓" : "Copy /w to seller"}</button>
+      </div>
+    </div>` : ""}
+  `;
+  card.addEventListener("click", (event) => handleOpportunityClick(event, opportunity));
+  return card;
 }
 
 function handleOpportunityClick(event, opportunity) {
@@ -532,18 +617,24 @@ function renderArcanes(arcanes) {
   if (elements.arcaneCoverageSub) elements.arcaneCoverageSub.textContent = `${formatNumber(arcanes?.totals?.orders ?? 0)} visible WFM orders cached`;
   if (elements.arcaneVosforRate) elements.arcaneVosforRate.textContent = vosforFloor === null ? "—" : `${vosforFloor.toFixed(2)}◈`;
 
-  elements.arcanePacks.innerHTML = packs.length === 0 ? `<div class="empty-state">No Vosfor pack valuations yet.</div>` : packs.slice(0, 6).map((pack, index) => `
+  const visiblePacks = packs.slice(0, RESULT_BUDGETS.arcaneCards);
+  elements.arcanePacks.innerHTML = packs.length === 0 ? `<div class="empty-state">No Vosfor pack valuations yet.</div>` : visiblePacks.map((pack, index) => `
     <article class="arcane-pack-card">
       <div class="arcane-card-rank">#${index + 1}</div>
       <div class="arcane-card-body">
         <div class="arcane-card-title">${escapeHtml(pack.packName)}</div>
         <div class="arcane-card-value">${Math.round(pack.expectedPlat)}◈ EV <span>${(pack.expectedPlatPerVosfor ?? 0).toFixed(3)}◈/Vosfor</span></div>
         <div class="arcane-card-meta">${Math.round((pack.coveragePct ?? 0) * 100)}% priced · ${Math.round((pack.confidence ?? 0) * 100)}% confidence · ${formatNumber(pack.missingPriceCount ?? 0)} missing prices</div>
-        <div class="arcane-drop-row">${(pack.topDrops ?? []).slice(0, 4).map((drop) => `<span>${escapeHtml(drop.arcaneName)} <b>${Math.round((drop.chance ?? 0) * 1000) / 10}%</b> ${drop.priceUsed == null ? "—" : `${drop.priceUsed}◈`}</span>`).join("")}</div>
+        <div class="arcane-drop-row">${(pack.topDrops ?? []).slice(0, 8).map((drop) => `<span>${escapeHtml(drop.arcaneName)} <b>${Math.round((drop.chance ?? 0) * 1000) / 10}%</b> ${drop.priceUsed == null ? "—" : `${drop.priceUsed}◈`}</span>`).join("")}</div>
       </div>
-    </article>`).join("");
+    </article>`).join("") + resultLimitNote("Vosfor packs", visiblePacks.length, packs.length);
 
-  elements.arcaneDissolves.innerHTML = recommendations.length === 0 ? `<div class="empty-state">No dissolve recommendations yet.</div>` : recommendations.slice(0, 12).map((entry) => `
+  const recommendationLimit = Math.min(recommendations.length, RESULT_BUDGETS.arcaneRecommendations, arcaneDissolveVisibleCount);
+  const visibleRecommendations = recommendations.slice(0, recommendationLimit);
+  const dissolveMore = recommendationLimit < recommendations.length && recommendationLimit < RESULT_BUDGETS.arcaneRecommendations
+    ? `<button class="show-more-button" type="button" data-show-more-dissolves>Show ${formatNumber(Math.min(ARCANE_DISSOLVE_SHOW_MORE_BATCH, recommendations.length - recommendationLimit))} more</button>`
+    : resultLimitNote("dissolve recommendations", recommendationLimit, recommendations.length);
+  elements.arcaneDissolves.innerHTML = recommendations.length === 0 ? `<div class="empty-state">No dissolve recommendations yet.</div>` : visibleRecommendations.map((entry) => `
     <article class="arcane-dissolve-card ${entry.action}">
       <div>
         <div class="arcane-card-title">${escapeHtml(entry.name)} <span>R${entry.rank}</span></div>
@@ -553,14 +644,19 @@ function renderArcanes(arcanes) {
         <strong>${escapeHtml(entry.action)}</strong>
         <span>${entry.deltaPlat >= 0 ? "+" : ""}${entry.deltaPlat.toFixed(1)}◈ EV</span>
       </div>
-    </article>`).join("");
+    </article>`).join("") + dissolveMore;
+  elements.arcaneDissolves.querySelector("[data-show-more-dissolves]")?.addEventListener("click", () => {
+    arcaneDissolveVisibleCount += ARCANE_DISSOLVE_SHOW_MORE_BATCH;
+    renderArcanes(arcanes);
+  });
 
   const marketRows = [...summaries].sort((left, right) => {
     const leftPrice = left.rankMax?.sell?.p25 ?? left.rank0?.sell?.p25 ?? 0;
     const rightPrice = right.rankMax?.sell?.p25 ?? right.rank0?.sell?.p25 ?? 0;
     return rightPrice - leftPrice;
   });
-  elements.arcaneMarket.innerHTML = marketRows.length === 0 ? `<div class="empty-state">No Arcane market rows yet.</div>` : marketRows.slice(0, 80).map((entry) => {
+  const visibleMarketRows = marketRows.slice(0, RESULT_BUDGETS.arcaneRows);
+  elements.arcaneMarket.innerHTML = marketRows.length === 0 ? `<div class="empty-state">No Arcane market rows yet.</div>` : visibleMarketRows.map((entry) => {
     const maxRank = entry.rankMax ?? null;
     const rank0 = entry.rank0 ?? null;
     const sellPrice = maxRank?.sell?.p25 ?? rank0?.sell?.p25 ?? null;
@@ -572,7 +668,7 @@ function renderArcanes(arcanes) {
         <div><span class="small-label">R${entry.maxRank} p25</span><strong>${sellPrice == null ? "—" : `${sellPrice}◈`}</strong></div>
         <div><span class="small-label">Depth</span><strong>${formatNumber(marketDepth)}</strong></div>
       </article>`;
-  }).join("");
+  }).join("") + resultLimitNote("Arcane market rows", visibleMarketRows.length, marketRows.length);
 }
 
 function arcaneThumb(summary) {
@@ -583,7 +679,8 @@ function arcaneThumb(summary) {
 function renderWeapons(summaries) {
   if (!elements.weapons) return;
   elements.weapons.textContent = "";
-  for (const summary of summaries.slice(0, 36)) {
+  const visibleSummaries = summaries.slice(0, RESULT_BUDGETS.weaponCards);
+  for (const summary of visibleSummaries) {
     const stats = summary.priceStats;
     const card = document.createElement("article");
     card.className = "weapon-card";
@@ -600,17 +697,20 @@ function renderWeapons(summaries) {
     card.addEventListener("click", () => openWeaponDetail(summary.slug));
     elements.weapons.appendChild(card);
   }
+  if (visibleSummaries.length < summaries.length) elements.weapons.insertAdjacentHTML("beforeend", resultLimitNote("weapon summaries", visibleSummaries.length, summaries.length));
   if (summaries.length === 0) elements.weapons.innerHTML = `<div class="empty-state">No weapon market summaries yet.</div>`;
 }
 
 function renderHeatmap(summaries) {
   if (!elements.heatmap) return;
-  const items = summaries.filter((summary) => (summary.directListings ?? summary.listings ?? 0) > 0).slice(0, 18);
+  const allItems = summaries.filter((summary) => (summary.directListings ?? summary.listings ?? 0) > 0);
+  const visibleLimit = Math.min(allItems.length, RESULT_BUDGETS.heatmapCards, heatmapVisibleCount);
+  const items = allItems.slice(0, visibleLimit);
   if (items.length === 0) {
     elements.heatmap.innerHTML = `<div class="empty-state">Market coverage appears after the first feed load.</div>`;
     return;
   }
-  const maxListings = Math.max(1, ...items.map((summary) => summary.directListings ?? summary.listings ?? 0));
+  const maxListings = Math.max(1, ...allItems.map((summary) => summary.directListings ?? summary.listings ?? 0));
   elements.heatmap.textContent = "";
   for (const summary of items) {
     const listings = summary.directListings ?? summary.listings ?? 0;
@@ -631,6 +731,19 @@ function renderHeatmap(summaries) {
     button.innerHTML = `<strong>${escapeHtml(summary.name)}</strong><span style="color:${text}">${formatNumber(listings)} listings · ${actionable} actionable</span>`;
     button.addEventListener("click", () => openWeaponDetail(summary.slug));
     elements.heatmap.appendChild(button);
+  }
+  if (visibleLimit < allItems.length && visibleLimit < RESULT_BUDGETS.heatmapCards) {
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "show-more-button heatmap-more";
+    more.textContent = `Show ${formatNumber(Math.min(HEATMAP_SHOW_MORE_BATCH, allItems.length - visibleLimit))} more`;
+    more.addEventListener("click", () => {
+      heatmapVisibleCount += HEATMAP_SHOW_MORE_BATCH;
+      renderHeatmap(summaries);
+    });
+    elements.heatmap.appendChild(more);
+  } else if (visibleLimit < allItems.length) {
+    elements.heatmap.insertAdjacentHTML("beforeend", resultLimitNote("market coverage cards", visibleLimit, allItems.length));
   }
 }
 
@@ -668,6 +781,7 @@ function drawChart(opportunities) {
     return;
   }
 
+  const chartItems = chartRenderItems(opportunities);
   const maxRoi = Math.max(1, ...opportunities.map((entry) => entry.roi ?? 0));
   const maxProfit = Math.max(1, ...opportunities.map((entry) => entry.expectedProfit ?? 0));
 
@@ -679,8 +793,11 @@ function drawChart(opportunities) {
     const profit = Math.round(((4 - i) * maxProfit) / 4);
     context.fillText(`${profit}◈`, 4, marginY + (i * plotH) / 4 + 4);
   }
+  if (chartItems.length < opportunities.length) {
+    context.fillText(`${formatNumber(chartItems.length)}/${formatNumber(opportunities.length)} plotted`, width - marginX - 96, marginY - 8);
+  }
 
-  for (const opportunity of opportunities) {
+  for (const opportunity of chartItems) {
     const roi = Math.max(0, Math.min(maxRoi, opportunity.roi ?? 0));
     const profit = Math.max(0, Math.min(maxProfit, opportunity.expectedProfit ?? 0));
     const cx = marginX + (roi / maxRoi) * plotW;
@@ -1059,7 +1176,7 @@ function renderWeaponDetail(detail) {
     : `<div class="wd-empty">No signature history yet. Once cold-scans have logged samples for this weapon over ~30 days, common stat combos with p25/median/p75 pricing will appear here.</div>`;
 
   const opportunitiesHtml = (opportunities ?? []).length > 0
-    ? opportunities.slice(0, 8).map((opp) => {
+    ? opportunities.slice(0, RESULT_BUDGETS.weaponDetailOpportunities).map((opp) => {
         const tier = opp.quality?.tier ?? tierFromScore(opp.score);
         return `<div class="wd-opp" data-url="${escapeHtml(opp.url)}">
           <div class="wd-opp-price"><span class="price">${opp.buyPrice}◈</span> → ${opp.targetSellPrice}◈ <span class="profit">+${opp.expectedProfit}◈</span></div>
@@ -1133,7 +1250,6 @@ function collectConfig() {
     minBuyPrice: elements.minBuyPrice.value.trim() === "" ? null : Number(elements.minBuyPrice.value),
     maxBuyPrice: elements.maxBuyPrice.value.trim() === "" ? null : Number(elements.maxBuyPrice.value),
     maxSellPrice: elements.maxSellPrice.value.trim() === "" ? null : Number(elements.maxSellPrice.value),
-    maxResults: Number(elements.maxResults.value),
     statuses,
   };
 }

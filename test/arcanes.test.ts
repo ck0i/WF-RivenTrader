@@ -180,4 +180,37 @@ assert.equal(negative.estimatedRollValue, 150);
 assert.equal(negative.deltaPlat, -20);
 assert.equal(negative.action, "sell", "sale value beyond the negative margin should recommend selling rather than dissolving");
 
+const bulkDissolveCount = 85;
+const bulkDissolveItems = [
+  makeArcane("bulk_roll_prize", "Bulk Roll Prize"),
+  ...Array.from({ length: bulkDissolveCount }, (_, index) =>
+    makeArcane(`bulk_dissolve_${String(index).padStart(3, "0")}`, `Bulk Dissolve ${index}`, 100),
+  ),
+];
+const bulkDissolveOrders = new Map<string, ArcaneOrder[]>([
+  ["bulk_roll_prize", [sellOrder("bulk_roll_prize", 100)]],
+  ...bulkDissolveItems
+    .filter((item) => item.slug !== "bulk_roll_prize")
+    .map((item): [string, ArcaneOrder[]] => [item.slug, [sellOrder(item.slug, 1)]]),
+]);
+const bulkDissolveAnalysis = analyzeArcaneMarket(bulkDissolveItems, bulkDissolveOrders, new Map(), [
+  makePack("bulk_vosfor_roll", [
+    { arcaneSlug: "bulk_roll_prize", arcaneName: "Bulk Roll Prize", rarity: "rare", chance: 1 },
+  ]),
+]);
+assert.equal(
+  bulkDissolveAnalysis.dissolveRecommendations.length,
+  bulkDissolveCount,
+  "arcane analysis should preserve every dissolve recommendation instead of truncating to the old 80-row cap",
+);
+assert.equal(
+  bulkDissolveAnalysis.totals.recommendations,
+  bulkDissolveCount,
+  "dashboard totals should count every preserved dissolve recommendation",
+);
+assert(
+  bulkDissolveAnalysis.dissolveRecommendations.some((entry) => entry.slug === "bulk_dissolve_084"),
+  "arcane analysis should keep dissolve candidates beyond the old 80-row cap",
+);
+
 console.log("arcane pack EV + dissolve recommendation tests passed");

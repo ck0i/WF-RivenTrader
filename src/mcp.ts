@@ -23,9 +23,9 @@ import {
   type MetaComputeInput,
 } from "./mcp/schemas.js";
 import { isRecord, readNumber, readPositiveInteger, readString, readStringArray } from "./wfm/guards.js";
-import { attributeSignature } from "./wfm/opportunities.js";
+import { attributeSignature, slugify } from "./wfm/opportunities.js";
 import type { ThePlatExchangeService } from "./wfm/scanner.js";
-import type { DashboardState, Opportunity, TraderConfig } from "./wfm/types.js";
+import type { ArcaneDashboardState, ArcaneDissolveRecommendation, ArcaneMarketSummary, ArcanePackValuation, DashboardState, Opportunity, TraderConfig } from "./wfm/types.js";
 
 interface McpSession {
   id: string;
@@ -121,6 +121,12 @@ export class McpSseServer {
     if (name === "riven_health") return this.healthTool(request.id);
     if (name === "riven_signature_value") return this.signatureValueTool(request.id, argumentsRecord);
     if (name === "riven_instant_wins") return this.instantWinsTool(request.id, argumentsRecord);
+    if (name === "arcane_health") return this.arcaneHealthTool(request.id);
+    if (name === "arcane_refresh") return this.arcaneRefreshTool(request.id);
+    if (name === "arcane_packs") return this.arcanePacksTool(request.id, argumentsRecord);
+    if (name === "arcane_dissolve_recommendations") return this.arcaneDissolveRecommendationsTool(request.id, argumentsRecord);
+    if (name === "arcane_market") return this.arcaneMarketTool(request.id, argumentsRecord);
+    if (name === "arcane_detail") return this.arcaneDetailTool(request.id, argumentsRecord);
     return err(request.id, -32602, `Unknown tool: ${name ?? "missing"}`, { retryable: false });
   }
 
@@ -254,6 +260,95 @@ export class McpSseServer {
     return ok(id, this.finalizeEnvelope(toEnvelope(null, meta)));
   }
 
+  private arcaneHealthTool(id: unknown): Record<string, unknown> {
+    const state = this.service.getState();
+    const meta = this.buildArcaneMeta(state);
+    return ok(id, this.finalizeEnvelope(toEnvelope(null, meta)));
+  }
+
+  private arcaneRefreshTool(id: unknown): Record<string, unknown> {
+    void this.service.refreshArcanes("mcp-arcane", "full");
+    const state = this.service.getState();
+    const meta = this.buildArcaneMeta(state);
+    return ok(id, this.finalizeEnvelope(toEnvelope({ accepted: true, reason: "arcane refresh scheduled" }, meta)));
+  }
+
+  private arcanePacksTool(id: unknown, args: Record<string, unknown>): Record<string, unknown> {
+    const limit = readPositiveInteger(args, "limit", 25);
+    const minConfidence = readNumber(args, "minConfidence") ?? readNumber(args, "min_confidence") ?? 0;
+    const state = this.service.getState();
+    const meta = this.buildArcaneMeta(state);
+    const packs = [...(state.arcanes?.packs ?? [])]
+      .filter((pack) => pack.confidence >= minConfidence)
+      .sort(compareArcanePacks)
+      .slice(0, limit);
+    return ok(id, this.finalizeEnvelope(toEnvelope(packs, meta)));
+  }
+
+  private arcaneDissolveRecommendationsTool(id: unknown, args: Record<string, unknown>): Record<string, unknown> {
+    const limit = readPositiveInteger(args, "limit", 25);
+    const minDelta = readNumber(args, "minDeltaPlat") ?? readNumber(args, "min_delta_plat");
+    const actions = parseArcaneActions(args);
+    const state = this.service.getState();
+    const meta = this.buildArcaneMeta(state);
+    const recommendations = (state.arcanes?.dissolveRecommendations ?? [])
+      .filter((entry) => actions.size === 0 || actions.has(entry.action))
+      .filter((entry) => minDelta === undefined || entry.deltaPlat >= minDelta)
+      .slice(0, limit);
+    return ok(id, this.finalizeEnvelope(toEnvelope(recommendations, meta)));
+  }
+
+  private arcaneMarketTool(id: unknown, args: Record<string, unknown>): Record<string, unknown> {
+    const limit = readPositiveInteger(args, "limit", 25);
+    const query = readString(args, "query") ?? readString(args, "q") ?? "";
+    const rarityValues = [...readStringArray(args, "rarities"), ...readStringArray(args, "rarity")];
+    const singleRarity = readString(args, "rarity");
+    if (singleRarity) rarityValues.push(singleRarity);
+    const rarityFilter = new Set(rarityValues.map((entry) => entry.toLowerCase()));
+    const minOnlineSellListings = Math.max(0, Math.floor(readNumber(args, "minOnlineSellListings") ?? readNumber(args, "min_online_sell_listings") ?? 0));
+    const sort = readArcaneMarketSort(args);
+    const state = this.service.getState();
+    const meta = this.buildArcaneMeta(state);
+    const needle = query.trim().toLowerCase();
+    const summaries = [...(state.arcanes?.summaries ?? [])]
+      .filter((summary) => !needle || summary.name.toLowerCase().includes(needle) || summary.slug.toLowerCase().includes(needle))
+      .filter((summary) => rarityFilter.size === 0 || rarityFilter.has(summary.rarity))
+      .filter((summary) => summary.onlineSellListings >= minOnlineSellListings)
+      .sort((left, right) => compareArcaneSummariesForTool(left, right, sort))
+      .slice(0, limit);
+    return ok(id, this.finalizeEnvelope(toEnvelope(summaries, meta)));
+  }
+
+  private arcaneDetailTool(id: unknown, args: Record<string, unknown>): Record<string, unknown> {
+    const requested = readString(args, "slug") ?? readString(args, "name") ?? readString(args, "query");
+    if (!requested) return err(id, -32602, "slug or name is required", { retryable: false });
+    const state = this.service.getState();
+    const meta = this.buildArcaneMeta(state);
+    const detail = state.arcanes ? computeArcaneDetail(state.arcanes, requested) : null;
+    return ok(id, this.finalizeEnvelope(toEnvelope(detail, meta)));
+  }
+
+  private buildArcaneMeta(state: DashboardState): EnvelopeMeta {
+    const arcanes = state.arcanes;
+    const status = arcanes?.status;
+    const generatedAt = arcanes?.generatedAt ?? state.generatedAt;
+    const generatedAtMs = Date.parse(generatedAt);
+    const fallbackLatestScan = latestArcaneScanAt(arcanes?.summaries ?? []);
+    const lastSampleAt = status?.finishedAt ?? status?.startedAt ?? fallbackLatestScan;
+    const freshness = lastSampleAt ? Math.max(0, generatedAtMs - Date.parse(lastSampleAt)) : Number.MAX_SAFE_INTEGER;
+    const dataSource: EnvelopeMeta["data_source"] = status?.running || freshness < LIVE_WINDOW_MS ? "live" : "cache";
+    const totalTargets = status && status.totalWeapons > 0 ? status.totalWeapons : arcanes?.reference.items ?? 0;
+    const scannedTargets = status ? status.scannedWeapons : (arcanes?.summaries.filter((summary) => summary.lastScannedAt).length ?? 0);
+    return computeMeta({
+      generated_at: generatedAt,
+      data_source: dataSource,
+      freshness_ms: freshness,
+      scanned: scannedTargets,
+      total: totalTargets,
+      scan_running: status?.running ?? false,
+    });
+  }
+
   private buildMeta(state: DashboardState): EnvelopeMeta {
     const nowMs = Date.parse(state.generatedAt);
     const lastSampleAt = state.status.finishedAt ?? state.status.startedAt;
@@ -356,6 +451,78 @@ export class McpSseServer {
         },
         outputSchema: outputSchemas.instantWins,
       },
+      {
+        name: "arcane_health",
+        description: "Return only the arcane meta block (freshness, coverage, quality, warnings). Uses the arcane scan status, not riven weapon scan status.",
+        inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        outputSchema: outputSchemas.health,
+      },
+      {
+        name: "arcane_refresh",
+        description: "Start a non-overlapping Warframe.market arcane order refresh through the shared server-side token bucket.",
+        inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        outputSchema: outputSchemas.action,
+      },
+      {
+        name: "arcane_packs",
+        description: "Return ranked 200-Vosfor Arcane pack expected values with coverage, confidence, net Vosfor burn, and the highest-EV drops driving each pack.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            limit: { type: "number", minimum: 1, default: 25 },
+            minConfidence: { type: "number", minimum: 0, maximum: 1, default: 0 },
+          },
+          additionalProperties: false,
+        },
+        outputSchema: outputSchemas.arcanePacks,
+      },
+      {
+        name: "arcane_dissolve_recommendations",
+        description: "Return Arcane sell-vs-dissolve recommendations. Use action=dissolve for candidates where Vosfor pack EV beats direct sale by the safety margin.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            limit: { type: "number", minimum: 1, default: 25 },
+            action: { enum: ["dissolve", "sell", "hold"] },
+            actions: { type: "array", items: { enum: ["dissolve", "sell", "hold"] } },
+            minDeltaPlat: { type: "number" },
+          },
+          additionalProperties: false,
+        },
+        outputSchema: outputSchemas.arcaneDissolveRecommendations,
+      },
+      {
+        name: "arcane_market",
+        description: "Discover Arcane market rows with rank-0/max-rank price stats, liquidity, rarity, and platinum-per-Vosfor. Supports query, rarity, liquidity, and sort filters.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            limit: { type: "number", minimum: 1, default: 25 },
+            query: { type: "string" },
+            q: { type: "string" },
+            rarity: { anyOf: [{ type: "string", enum: ["common", "uncommon", "rare", "legendary", "unknown"] }, { type: "array", items: { enum: ["common", "uncommon", "rare", "legendary", "unknown"] } }] },
+            rarities: { type: "array", items: { enum: ["common", "uncommon", "rare", "legendary", "unknown"] } },
+            minOnlineSellListings: { type: "number", minimum: 0 },
+            sort: { enum: ["default", "sell_price", "liquidity", "vosfor_value"] },
+          },
+          additionalProperties: false,
+        },
+        outputSchema: outputSchemas.arcaneMarket,
+      },
+      {
+        name: "arcane_detail",
+        description: "Look up one Arcane by slug or name and return its market summary, sell-vs-dissolve recommendation, and every Vosfor pack drop entry containing it.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            slug: { type: "string" },
+            name: { type: "string" },
+            query: { type: "string" },
+          },
+          additionalProperties: false,
+        },
+        outputSchema: outputSchemas.arcaneDetail,
+      },
     ];
   }
 
@@ -398,6 +565,96 @@ function parseWatchlist(record: Record<string, unknown>): string[] {
   const text = readString(record, "watchlistText");
   const textValues = text ? text.split(/[\n,]+/).map((entry) => entry.trim()).filter((entry) => entry.length > 0) : [];
   return [...arrayValues, ...textValues];
+}
+
+type ArcaneAction = ArcaneDissolveRecommendation["action"];
+type ArcaneMarketSort = "default" | "sell_price" | "liquidity" | "vosfor_value";
+
+function parseArcaneActions(record: Record<string, unknown>): Set<ArcaneAction> {
+  const values = [...readStringArray(record, "actions")];
+  const single = readString(record, "action");
+  if (single) values.push(single);
+  const valid = new Set<ArcaneAction>();
+  for (const value of values) {
+    if (value === "dissolve" || value === "sell" || value === "hold") valid.add(value);
+  }
+  return valid;
+}
+
+function readArcaneMarketSort(record: Record<string, unknown>): ArcaneMarketSort {
+  const value = readString(record, "sort");
+  if (value === "sell_price" || value === "liquidity" || value === "vosfor_value") return value;
+  return "default";
+}
+
+function compareArcanePacks(left: ArcanePackValuation, right: ArcanePackValuation): number {
+  if (right.expectedPlatPerVosfor !== left.expectedPlatPerVosfor) return right.expectedPlatPerVosfor - left.expectedPlatPerVosfor;
+  if (right.confidence !== left.confidence) return right.confidence - left.confidence;
+  return right.expectedPlat - left.expectedPlat;
+}
+
+function compareArcaneSummariesForTool(left: ArcaneMarketSummary, right: ArcaneMarketSummary, sort: ArcaneMarketSort): number {
+  const leftRank0Sell = left.rank0.sell?.p25 ?? left.rank0.sell?.median ?? left.rank0.sell?.min ?? null;
+  const rightRank0Sell = right.rank0.sell?.p25 ?? right.rank0.sell?.median ?? right.rank0.sell?.min ?? null;
+  if (sort === "sell_price") return nullableDesc(rightRank0Sell, leftRank0Sell) || right.onlineSellListings - left.onlineSellListings;
+  if (sort === "liquidity") return right.onlineSellListings - left.onlineSellListings || right.sellListings - left.sellListings;
+  if (sort === "vosfor_value") return nullableAsc(left.priceVsVosfor?.platinumPerVosfor ?? null, right.priceVsVosfor?.platinumPerVosfor ?? null);
+  return (right.priceVsVosfor?.platinumPerVosfor ?? -1) - (left.priceVsVosfor?.platinumPerVosfor ?? -1) || right.onlineSellListings - left.onlineSellListings;
+}
+
+function nullableDesc(left: number | null, right: number | null): number {
+  if (left === null && right === null) return 0;
+  if (left === null) return -1;
+  if (right === null) return 1;
+  return left - right;
+}
+
+function nullableAsc(left: number | null, right: number | null): number {
+  if (left === null && right === null) return 0;
+  if (left === null) return 1;
+  if (right === null) return -1;
+  return left - right;
+}
+
+
+function computeArcaneDetail(arcanes: ArcaneDashboardState, query: string): Record<string, unknown> | null {
+  const querySlug = slugify(query);
+  const queryLower = query.trim().toLowerCase();
+  const summary = arcanes.summaries.find((entry) => entry.slug === querySlug || entry.name.toLowerCase() === queryLower) ?? null;
+  if (!summary) return null;
+  const topPackDrops = arcanes.packs
+    .map((pack) => {
+      const drop = pack.topDrops.find((entry) => entry.arcaneSlug === summary.slug);
+      if (!drop) return null;
+      return {
+        packId: pack.packId,
+        packName: pack.packName,
+        chance: drop.chance,
+        expectedCopies: drop.expectedCopies,
+        expectedPlat: drop.expectedPlat,
+        expectedVosfor: drop.expectedVosfor,
+        priceUsed: drop.priceUsed,
+        confidence: pack.confidence,
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .sort((left, right) => right.expectedPlat - left.expectedPlat);
+  return {
+    summary,
+    recommendation: arcanes.dissolveRecommendations.find((entry) => entry.slug === summary.slug) ?? null,
+    topPackDrops,
+    ordersUrl: summary.url,
+  };
+}
+
+function latestArcaneScanAt(summaries: readonly ArcaneMarketSummary[]): string | undefined {
+  let latest = 0;
+  for (const summary of summaries) {
+    if (!summary.lastScannedAt) continue;
+    const parsed = Date.parse(summary.lastScannedAt);
+    if (Number.isFinite(parsed) && parsed > latest) latest = parsed;
+  }
+  return latest > 0 ? new Date(latest).toISOString() : undefined;
 }
 
 function ok(id: unknown, result: unknown): Record<string, unknown> {

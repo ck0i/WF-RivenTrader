@@ -96,7 +96,6 @@ Most settings can be changed in the UI. Environment variables are useful for sta
 | `WFM_MIN_PROFIT` | `25` | Minimum expected profit in platinum. |
 | `WFM_MIN_ROI` | `0.35` | Minimum ROI. |
 | `WFM_MIN_GROUP_SIZE` | `4` | Minimum comparable listings required. |
-| `WFM_MAX_RESULTS` | `75` | Maximum ranked opportunities returned. |
 | `WFM_STATUSES` | `ingame,online` | Seller statuses to include. |
 | `WFM_MIN_BUY_PRICE` | unset | Optional minimum listing buyout. |
 | `WFM_MAX_BUY_PRICE` | unset | Optional maximum listing buyout. |
@@ -135,6 +134,12 @@ Available MCP tools include:
 - `riven_health`
 - `riven_signature_value`
 - `riven_instant_wins`
+- `arcane_health`
+- `arcane_refresh`
+- `arcane_packs`
+- `arcane_dissolve_recommendations`
+- `arcane_market`
+- `arcane_detail`
 
 ## HTTP endpoints
 

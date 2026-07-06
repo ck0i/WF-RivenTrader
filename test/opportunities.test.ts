@@ -163,4 +163,27 @@ const smallBook = analyzeMarket([war], new Map([["war", auctions.slice(0, 3)]]),
 });
 assert.equal(smallBook.opportunities.length, 0, "small comparable books should not produce false confidence");
 
+const preservedOpportunityAuctions: RivenAuction[] = [
+  ...Array.from({ length: 6 }, (_, index) => makeAuction(`preserved-cheap-${index + 1}`, 10 + index, "ingame", exactAttrs)),
+  ...Array.from({ length: 10 }, (_, index) => makeAuction(`preserved-market-${index + 1}`, 100, "ingame", exactAttrs)),
+];
+const preservedAnalysis = analyzeMarket([war], new Map([["war", preservedOpportunityAuctions]]), {
+  watchlist: ["war"],
+  minProfit: 20,
+  minRoi: 0.25,
+  minGroupSize: 4,
+  statuses: ["ingame"],
+  maxResults: 3,
+});
+const preservedIds = preservedAnalysis.opportunities.map((entry) => entry.auctionId);
+assert.equal(
+  preservedAnalysis.opportunities.length,
+  6,
+  "server analysis should preserve every valid opportunity instead of truncating to config.maxResults",
+);
+assert(
+  preservedIds.includes("preserved-cheap-6"),
+  "server analysis should keep opportunities beyond the user-visible maxResults window",
+);
+
 console.log("opportunities behavior tests passed");

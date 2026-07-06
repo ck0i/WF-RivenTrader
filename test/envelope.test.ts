@@ -102,6 +102,6 @@ assert(enriched.quality.signals.includes("new_seller"), "signals must flag new_s
 assert(enriched.quality.data_age_seconds >= 5, "data_age_seconds should reflect updated timestamp");
 
 const outSchemaKeys = Object.keys(outputSchemas);
-assert.deepEqual(outSchemaKeys.sort(), ["action", "health", "instantWins", "opportunities", "signatureValue", "snapshot"]);
+assert.deepEqual(outSchemaKeys.sort(), ["action", "arcaneDetail", "arcaneDissolveRecommendations", "arcaneMarket", "arcanePacks", "health", "instantWins", "opportunities", "signatureValue", "snapshot"]);
 
 console.log("envelope + meta + opportunity enrichment tests passed");

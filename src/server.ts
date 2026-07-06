@@ -468,12 +468,10 @@ function configUpdateFromPayload(payload: unknown): Partial<TraderConfig> {
   const minProfit = readNumber(payload, "minProfit");
   const minRoi = readNumber(payload, "minRoi");
   const minGroupSize = readNumber(payload, "minGroupSize");
-  const maxResults = readNumber(payload, "maxResults");
   const scanAllWhenWatchlistEmpty = readBoolean(payload, "scanAllWhenWatchlistEmpty");
   if (minProfit !== undefined) update.minProfit = minProfit;
   if (minRoi !== undefined) update.minRoi = minRoi;
   if (minGroupSize !== undefined) update.minGroupSize = minGroupSize;
-  if (maxResults !== undefined) update.maxResults = maxResults;
   if (scanAllWhenWatchlistEmpty !== undefined) update.scanAllWhenWatchlistEmpty = scanAllWhenWatchlistEmpty;
 
   if (payload.minBuyPrice === null) {

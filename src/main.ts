@@ -95,7 +95,6 @@ export function readLaunchConfig(args: string[], env: NodeJS.ProcessEnv): Launch
     minProfit: readNumberEnv(env, "WFM_MIN_PROFIT", DEFAULT_CONFIG.minProfit),
     minRoi: readNumberEnv(env, "WFM_MIN_ROI", DEFAULT_CONFIG.minRoi),
     minGroupSize: readNumberEnv(env, "WFM_MIN_GROUP_SIZE", DEFAULT_CONFIG.minGroupSize),
-    maxResults: readNumberEnv(env, "WFM_MAX_RESULTS", DEFAULT_CONFIG.maxResults),
     statuses: statuses.filter((entry) => entry === "ingame" || entry === "online" || entry === "offline" || entry === "unknown"),
   };
   const minBuy = readOptionalNumberEnv(env, "WFM_MIN_BUY_PRICE");

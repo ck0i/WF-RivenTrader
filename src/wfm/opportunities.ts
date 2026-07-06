@@ -164,7 +164,7 @@ export function analyzeMarket(
   weaponSummaries.sort((left, right) => (right.priceStats?.p75 ?? 0) - (left.priceStats?.p75 ?? 0));
 
   return {
-    opportunities: opportunities.slice(0, config.maxResults),
+    opportunities,
     weaponSummaries,
   };
 }

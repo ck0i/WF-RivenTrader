@@ -239,8 +239,7 @@ export function evaluateArcanePacks(
     const chanceMass = pack.drops.reduce((sum, drop) => sum + drop.chance, 0);
     const topDrops = drops
       .slice()
-      .sort((left, right) => right.expectedPlat - left.expectedPlat)
-      .slice(0, 8);
+      .sort((left, right) => right.expectedPlat - left.expectedPlat);
     return {
       packId: pack.id,
       packName: pack.name,
@@ -326,7 +325,7 @@ export function recommendArcaneDissolutions(
     if (actionRank !== 0) return actionRank;
     return right.deltaPlat - left.deltaPlat;
   });
-  return recommendations.slice(0, 80);
+  return recommendations;
 }
 
 export function mergeArcaneWikiData(items: readonly ArcaneItem[], wikiEntries: ReadonlyMap<string, ParsedArcaneWikiEntry>): ArcaneItem[] {
