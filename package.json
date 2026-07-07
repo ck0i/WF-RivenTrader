@@ -9,9 +9,9 @@
     "start": "tsx src/main.ts",
     "start:bun": "bun src/main.ts",
     "check": "tsc --noEmit",
-    "test:run-now": "tsx test/run-now-live.test.ts && tsx test/scanner.test.ts",
+    "test:run-now": "tsx test/run-now-live.test.ts && tsx test/run-now-fallback.test.ts && tsx test/scanner.test.ts",
     "run-now:fetch": "tsx scripts/run-now-fetch.ts",
-    "test": "tsx test/opportunities.test.ts && tsx test/scanner.test.ts && tsx test/cache.test.ts && tsx test/history.test.ts && tsx test/envelope.test.ts && tsx test/arcanes.test.ts && tsx test/mcp-arcanes.test.ts && tsx test/cold-shard-merge.test.ts && tsx test/user-store.test.ts && tsx test/product-engine.test.ts && tsx test/product-planning-primitives.test.ts && tsx test/run-now-live.test.ts"
+    "test": "tsx test/opportunities.test.ts && tsx test/scanner.test.ts && tsx test/cache.test.ts && tsx test/history.test.ts && tsx test/envelope.test.ts && tsx test/arcanes.test.ts && tsx test/mcp-arcanes.test.ts && tsx test/cold-shard-merge.test.ts && tsx test/user-store.test.ts && tsx test/product-engine.test.ts && tsx test/product-planning-primitives.test.ts && tsx test/run-now-live.test.ts && tsx test/run-now-fallback.test.ts"
   },
   "engines": {
     "node": ">=22.0.0"

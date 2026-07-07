@@ -6,8 +6,9 @@ import { extname, join, normalize, resolve } from "node:path";
 import { McpSseServer } from "./mcp.js";
 import { enrichOpportunity, type SignatureLookupHit } from "./mcp/schemas.js";
 import { attributeSignature } from "./wfm/opportunities.js";
+import { enforceRunNowWindow, isRunNowLiveArtifact, overlayRunNowArtifact, type RunNowLiveArtifact } from "./wfm/live.js";
 import { isRecord, readBoolean, readNumber, readString } from "./wfm/guards.js";
-import type { ItemRef, NotificationChannel, NotificationThreshold, ProductOpportunityAction, TodoStatus } from "./wfm/product.js";
+import type { ItemRef, NotificationChannel, NotificationThreshold, ProductDashboardState, ProductOpportunityAction, TodoStatus } from "./wfm/product.js";
 import type { NotificationRuleInput, PortfolioInput, ProfileUpdate, TodoInput, TodoUpdate } from "./wfm/userStore.js";
 import type { ThePlatExchangeService } from "./wfm/scanner.js";
 import type { DashboardState, SellerStatus, TraderConfig } from "./wfm/types.js";
@@ -95,6 +96,7 @@ function sanitizeImageName(raw: string): string | null {
 
 export interface RemoteFallbackOptions {
   url: string;
+  runNowUrl?: string;
   cacheMs?: number;
 }
 
@@ -103,26 +105,85 @@ class RemoteFallback {
   private cached: unknown = null;
   private readonly url: string;
   private readonly cacheMs: number;
+  private readonly runNowUrl: string | undefined;
 
   constructor(options: RemoteFallbackOptions) {
     this.url = options.url;
+    this.runNowUrl = options.runNowUrl ?? inferRunNowUrl(options.url);
     this.cacheMs = options.cacheMs ?? 60_000;
   }
 
   async fetchIfStale(): Promise<unknown | null> {
     const now = Date.now();
-    if (this.cached && now - this.lastFetch < this.cacheMs) return this.cached;
+    if (this.cached && now - this.lastFetch < this.cacheMs) return this.cachedWithCurrentRunNowWindow();
     try {
       const response = await fetch(this.url);
-      if (!response.ok) return this.cached;
+      if (!response.ok) return this.cachedWithCurrentRunNowWindow();
       const parsed = await response.json();
-      this.cached = parsed;
+      const withRunNow = await this.overlayRunNow(parsed);
+      this.cached = withRunNow;
       this.lastFetch = now;
-      return parsed;
+      return withRunNow;
     } catch {
-      return this.cached;
+      return this.cachedWithCurrentRunNowWindow();
     }
   }
+
+  private cachedWithCurrentRunNowWindow(): unknown | null {
+    if (!this.cached) return null;
+    if (!isDashboardStateWithProduct(this.cached)) return this.cached;
+    return {
+      ...this.cached,
+      product: enforceRunNowWindow(this.cached.product),
+    };
+  }
+
+  private async overlayRunNow(parsed: unknown): Promise<unknown> {
+    if (!isDashboardStateWithProduct(parsed)) return parsed;
+    const artifact = await this.fetchRunNowArtifact();
+    return {
+      ...parsed,
+      product: artifact ? overlayRunNowArtifact(parsed.product, artifact) : enforceRunNowWindow(parsed.product),
+    };
+  }
+
+  private async fetchRunNowArtifact(): Promise<RunNowLiveArtifact | null> {
+    if (!this.runNowUrl) return null;
+    try {
+      const response = await fetch(this.runNowUrl);
+      if (!response.ok) return null;
+      const parsed = await response.json();
+      return isRunNowLiveArtifact(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+function inferRunNowUrl(url: string): string | undefined {
+  const runNowUrl = url
+    .replace(/\/latest\/state\.json$/, "/latest/run-now.json")
+    .replace(/\/state\.json$/, "/run-now.json");
+  return runNowUrl === url ? undefined : runNowUrl;
+}
+
+function isDashboardStateWithProduct(value: unknown): value is DashboardState & { product: ProductDashboardState } {
+  if (!value || typeof value !== "object") return false;
+  if (!("product" in value) || !value.product || typeof value.product !== "object") return false;
+  const product = value.product;
+  if (!("generatedAt" in product) || typeof product.generatedAt !== "string") return false;
+  if (!("dataHealth" in product) || !product.dataHealth || typeof product.dataHealth !== "object") return false;
+  const dataHealth = product.dataHealth;
+  if (!("generatedAt" in dataHealth) || typeof dataHealth.generatedAt !== "string") return false;
+  if (!("sources" in dataHealth) || !Array.isArray(dataHealth.sources)) return false;
+  if (!("methods" in product) || !Array.isArray(product.methods)) return false;
+  if (!("opportunities" in product) || !Array.isArray(product.opportunities)) return false;
+  if (!("runNow" in product) || !product.runNow || typeof product.runNow !== "object") return false;
+  const runNow = product.runNow;
+  if (!("activities" in runNow) || !Array.isArray(runNow.activities)) return false;
+  if (!("rejectedActivities" in runNow) || !Array.isArray(runNow.rejectedActivities)) return false;
+  if (!("warnings" in runNow) || !Array.isArray(runNow.warnings)) return false;
+  return true;
 }
 
 const CONTENT_TYPES: Record<string, string> = {

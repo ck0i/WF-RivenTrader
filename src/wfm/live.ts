@@ -65,6 +65,25 @@ export interface RunNowLiveArtifact {
   runNow: RunNowDashboard;
 }
 
+export function isRunNowLiveArtifact(value: unknown): value is RunNowLiveArtifact {
+  if (!value || typeof value !== "object") return false;
+  if (!("schemaVersion" in value) || value.schemaVersion !== 1) return false;
+  if (!("generatedAt" in value) || typeof value.generatedAt !== "string") return false;
+  if (!("live" in value) || !value.live || typeof value.live !== "object") return false;
+  const live = value.live;
+  if (!("id" in live) || live.id !== "live") return false;
+  if (!("status" in live) || (live.status !== "green" && live.status !== "yellow" && live.status !== "red")) return false;
+  if (!("warnings" in live) || !Array.isArray(live.warnings)) return false;
+  if (!("ttlSeconds" in live) || typeof live.ttlSeconds !== "number") return false;
+  if (!("runNow" in value) || !value.runNow || typeof value.runNow !== "object") return false;
+  const runNow = value.runNow;
+  if (!("generatedAt" in runNow) || typeof runNow.generatedAt !== "string") return false;
+  if (!("activities" in runNow) || !Array.isArray(runNow.activities)) return false;
+  if (!("rejectedActivities" in runNow) || !Array.isArray(runNow.rejectedActivities)) return false;
+  if (!("warnings" in runNow) || !Array.isArray(runNow.warnings)) return false;
+  return true;
+}
+
 export async function fetchLiveActivitySnapshot(userAgent: string, fetcher: typeof fetch = fetch, now = new Date()): Promise<LiveActivitySnapshot> {
   const fetchedAt = now.toISOString();
   const warnings: string[] = [];
