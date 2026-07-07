@@ -386,20 +386,34 @@ function listWeapons(service: ThePlatExchangeService, url: URL): Array<Record<st
   const state = service.getState();
   const summaryBySlug = new Map(state.weaponSummaries.map((summary) => [summary.slug, summary]));
   const matches = query
-    ? weapons.filter((weapon) => weapon.name.toLowerCase().includes(query) || weapon.slug.toLowerCase().includes(query) || weapon.group.toLowerCase().includes(query))
-    : weapons;
+    ? weapons
+        .map((weapon) => {
+          const name = weapon.name.toLowerCase();
+          const slug = weapon.slug.toLowerCase();
+          const group = weapon.group.toLowerCase();
+          let matchScore = 0;
+          if (name === query || slug === query || group === query) matchScore = 4;
+          else if (name.startsWith(query) || slug.startsWith(query)) matchScore = 3;
+          else if (name.includes(query) || slug.includes(query)) matchScore = 2;
+          else if (group.startsWith(query) || group.includes(query)) matchScore = 1;
+          return matchScore ? { weapon, matchScore } : null;
+        })
+        .filter((entry): entry is { weapon: (typeof weapons)[number]; matchScore: number } => Boolean(entry))
+    : weapons.map((weapon) => ({ weapon, matchScore: 0 }));
   const sorted = [...matches].sort((left, right) => {
-    const leftSummary = summaryBySlug.get(left.slug);
-    const rightSummary = summaryBySlug.get(right.slug);
+    if (right.matchScore !== left.matchScore) return right.matchScore - left.matchScore;
+    const leftSummary = summaryBySlug.get(left.weapon.slug);
+    const rightSummary = summaryBySlug.get(right.weapon.slug);
     const leftScore = leftSummary?.marketIntel?.marketScore ?? -1;
     const rightScore = rightSummary?.marketIntel?.marketScore ?? -1;
     if (leftScore !== rightScore) return rightScore - leftScore;
     const leftLive = leftSummary?.priceStats?.median ?? -1;
     const rightLive = rightSummary?.priceStats?.median ?? -1;
     if (leftLive !== rightLive) return rightLive - leftLive;
-    return right.disposition - left.disposition;
+    return right.weapon.disposition - left.weapon.disposition;
   });
-  return sorted.slice(0, limit).map((weapon) => {
+  return sorted.slice(0, limit).map((entry) => {
+    const weapon = entry.weapon;
     const summary = summaryBySlug.get(weapon.slug);
     return {
       slug: weapon.slug,

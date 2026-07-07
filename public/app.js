@@ -160,6 +160,9 @@ let arcanePackStrategy = "high_value_maxed";
 let renderedOpportunityByKey = new Map();
 let watchlistSelections = [];
 let watchlistSuggestionTimer = 0;
+let watchlistSuggestionRows = [];
+let watchlistSuggestionActiveIndex = -1;
+let watchlistSuggestionSequence = 0;
 let runNowPage = 0;
 let marketsPage = 0;
 let rankedOverlayState = null;
@@ -595,13 +598,38 @@ function hydrateControls(state) {
   hydrateProductControls(state.product);
 }
 
+function normalizeWatchlistInput(value) {
+  return String(value ?? "").trim();
+}
+
+function setWatchlistSuggestionsHidden(hidden) {
+  if (!elements.watchlistSuggestions) return;
+  elements.watchlistSuggestions.hidden = hidden;
+  if (hidden) watchlistSuggestionActiveIndex = -1;
+}
+
+function updateWatchlistSuggestionSelection() {
+  if (!elements.watchlistSuggestions) return;
+  const buttons = elements.watchlistSuggestions.querySelectorAll("button[data-watchlist-index]");
+  for (const [index, button] of Array.from(buttons).entries()) {
+    const selected = index === watchlistSuggestionActiveIndex;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-selected", selected ? "true" : "false");
+  }
+}
+
 function addWatchlistSelection(name) {
-  const clean = String(name ?? "").trim();
-  if (!clean) return;
+  const clean = normalizeWatchlistInput(name);
+  if (!clean) return false;
   if (!watchlistSelections.some((entry) => entry.toLowerCase() === clean.toLowerCase())) watchlistSelections.push(clean);
   if (elements.watchlist) elements.watchlist.value = "";
-  if (elements.watchlistSuggestions) elements.watchlistSuggestions.hidden = true;
+  watchlistSuggestionSequence += 1;
+  window.clearTimeout(watchlistSuggestionTimer);
+  watchlistSuggestionTimer = 0;
+  watchlistSuggestionRows = [];
+  setWatchlistSuggestionsHidden(true);
   renderWatchlistChips();
+  return true;
 }
 
 function removeWatchlistSelection(name) {
@@ -610,40 +638,88 @@ function removeWatchlistSelection(name) {
   renderWatchlistChips();
 }
 
+function resolveWatchlistSelection(query) {
+  const clean = normalizeWatchlistInput(query).toLowerCase();
+  if (!clean) return null;
+  const active = watchlistSuggestionRows[watchlistSuggestionActiveIndex];
+  if (active && watchlistSuggestionActiveIndex >= 0) return active.name;
+  for (const row of watchlistSuggestionRows) {
+    if (row.name?.toLowerCase() === clean || row.slug?.toLowerCase() === clean) return row.name;
+  }
+  return null;
+}
+
+function commitWatchlistInput() {
+  const match = resolveWatchlistSelection(elements.watchlist?.value);
+  if (match) return addWatchlistSelection(match);
+  return addWatchlistSelection(elements.watchlist?.value);
+}
+
+function selectWatchlistSuggestion(index) {
+  const row = watchlistSuggestionRows[Number(index)];
+  if (!row) return false;
+  return addWatchlistSelection(row.name);
+}
+
 function watchlistTermsForSubmit() {
-  const transient = String(elements.watchlist?.value ?? "").trim();
-  return [...watchlistSelections, transient].filter(Boolean);
+  commitWatchlistInput();
+  return [...watchlistSelections];
+}
+
+function moveWatchlistSuggestion(delta) {
+  const total = watchlistSuggestionRows.length;
+  if (!elements.watchlistSuggestions || elements.watchlistSuggestions.hidden || total === 0) return false;
+  if (watchlistSuggestionActiveIndex < 0) watchlistSuggestionActiveIndex = 0;
+  watchlistSuggestionActiveIndex = (watchlistSuggestionActiveIndex + delta + total) % total;
+  updateWatchlistSuggestionSelection();
+  return true;
 }
 
 function scheduleWatchlistSuggestions() {
+  watchlistSuggestionActiveIndex = -1;
+  watchlistSuggestionSequence += 1;
   window.clearTimeout(watchlistSuggestionTimer);
   watchlistSuggestionTimer = window.setTimeout(updateWatchlistSuggestions, 120);
 }
 
 async function updateWatchlistSuggestions() {
-  const query = String(elements.watchlist?.value ?? "").trim();
+  const query = normalizeWatchlistInput(elements.watchlist?.value);
   if (!elements.watchlistSuggestions || query.length < 2) {
-    if (elements.watchlistSuggestions) elements.watchlistSuggestions.hidden = true;
+    watchlistSuggestionRows = [];
+    setWatchlistSuggestionsHidden(true);
     return;
   }
+  const requestId = ++watchlistSuggestionSequence;
   try {
     const response = await fetch(`/api/weapons?q=${encodeURIComponent(query)}&limit=6`);
     if (!response.ok) throw new Error(`status ${response.status}`);
     const weapons = await response.json();
+    if (requestId !== watchlistSuggestionSequence) return;
     const rows = Array.isArray(weapons) ? weapons : [];
-    if (rows.length === 0) {
-      elements.watchlistSuggestions.hidden = true;
+    watchlistSuggestionRows = rows.map((weapon) => ({
+      name: normalizeWatchlistInput(weapon?.name),
+      slug: normalizeWatchlistInput(weapon?.slug),
+      group: weapon?.group,
+      imageName: weapon?.imageName ?? weapon?.summary?.imageName,
+    })).filter((row) => row.name);
+    if (watchlistSuggestionRows.length === 0) {
+      setWatchlistSuggestionsHidden(true);
       return;
     }
-    elements.watchlistSuggestions.innerHTML = rows.map((weapon) => `
-      <button type="button" data-watchlist-add="${escapeHtml(weapon.name)}">
-        ${weaponThumb(weapon.imageName ?? weapon.summary?.imageName, weapon.name, "sm")}
+    watchlistSuggestionRows = watchlistSuggestionRows.slice(0, 6);
+    watchlistSuggestionActiveIndex = 0;
+    elements.watchlistSuggestions.innerHTML = watchlistSuggestionRows.map((weapon, index) => `
+      <button type="button" data-watchlist-index="${index}">
+        ${weaponThumb(weapon.imageName, weapon.name, "sm")}
         <span><strong>${escapeHtml(weapon.name)}</strong><small>${escapeHtml(weapon.group ?? "weapon")}</small></span>
       </button>
     `).join("");
-    elements.watchlistSuggestions.hidden = false;
+    updateWatchlistSuggestionSelection();
+    setWatchlistSuggestionsHidden(false);
   } catch {
-    elements.watchlistSuggestions.hidden = true;
+    if (requestId !== watchlistSuggestionSequence) return;
+    watchlistSuggestionRows = [];
+    setWatchlistSuggestionsHidden(true);
   }
 }
 
@@ -2656,22 +2732,46 @@ for (const button of document.querySelectorAll("[data-sort]")) {
 if (elements.watchlist) {
   elements.watchlist.addEventListener("input", scheduleWatchlistSuggestions);
   elements.watchlist.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown") {
+      if (moveWatchlistSuggestion(1)) event.preventDefault();
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      if (moveWatchlistSuggestion(-1)) event.preventDefault();
+      return;
+    }
     if (event.key === "Enter" || event.key === ",") {
       event.preventDefault();
-      addWatchlistSelection(elements.watchlist.value);
+      commitWatchlistInput();
+      return;
     }
-    if (event.key === "Escape" && elements.watchlistSuggestions) elements.watchlistSuggestions.hidden = true;
+    if (event.key === "Tab") {
+      if (commitWatchlistInput()) event.preventDefault();
+      return;
+    }
+    if (event.key === "Escape") setWatchlistSuggestionsHidden(true);
+  });
+}
+
+if (elements.watchlistSuggestions && elements.watchlist && elements.watchlistSuggestions) {
+  document.addEventListener("click", (event) => {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (!target) return;
+    if (elements.watchlist === target || elements.watchlist?.contains(target)) return;
+    if (elements.watchlistSuggestions.contains(target)) return;
+    setWatchlistSuggestionsHidden(true);
   });
 }
 
 if (elements.watchlistSuggestions) {
   elements.watchlistSuggestions.addEventListener("click", (event) => {
-    const button = event.target instanceof HTMLElement ? event.target.closest("[data-watchlist-add]") : null;
+    const button = event.target instanceof HTMLElement ? event.target.closest("[data-watchlist-index]") : null;
     if (!button || !elements.watchlistSuggestions.contains(button)) return;
-    addWatchlistSelection(button.dataset.watchlistAdd);
+    const index = Number(button.dataset.watchlistIndex);
+    if (Number.isNaN(index)) return;
+    selectWatchlistSuggestion(index);
   });
 }
-
 if (elements.watchlistChips) {
   elements.watchlistChips.addEventListener("click", (event) => {
     const button = event.target instanceof HTMLElement ? event.target.closest("[data-watchlist-remove]") : null;
@@ -2679,6 +2779,7 @@ if (elements.watchlistChips) {
     removeWatchlistSelection(button.dataset.watchlistRemove);
   });
 }
+
 
 if (elements.form) {
   elements.form.addEventListener("submit", async (event) => {

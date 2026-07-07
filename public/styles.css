@@ -378,7 +378,17 @@ body.motion-reveal .fresh-card:nth-child(-n+5), body.motion-reveal .instant-prev
 .opportunities-grid { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; align-items: start; transition: grid-template-columns var(--motion-slow) var(--ease-out), gap var(--motion-slow) var(--ease-out); }
 .opportunities-grid.filters-auto-hidden { grid-template-columns: 0 minmax(0, 1fr); gap: 0; }
 .opportunities-grid.filters-auto-hidden .filters-card { opacity: 0; pointer-events: none; transform: translate3d(-18px, 0, 0) scale(.985); }
-.filters-card { min-width: 0; overflow: hidden; padding: 14px; position: sticky; top: 12px; opacity: 1; transform: translate3d(0, 0, 0) scale(1); transition: opacity var(--motion-med) ease, transform var(--motion-med) var(--ease-out); will-change: opacity, transform; }
+.filters-card { 
+  min-width: 0;
+  overflow: visible;
+  padding: 14px;
+  position: sticky;
+  top: 12px;
+  opacity: 1;
+  transform: translate3d(0, 0, 0) scale(1);
+  transition: opacity var(--motion-med) ease, transform var(--motion-med) var(--ease-out);
+  will-change: opacity, transform;
+}
 .filters-card summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; }
 .filters-card summary::-webkit-details-marker { display: none; }
 .filters-card summary::after { content: "▾"; color: var(--muted); font-size: 10px; transition: transform var(--motion-fast) var(--ease-out); }
@@ -423,7 +433,11 @@ body.motion-reveal .fresh-card:nth-child(-n+5), body.motion-reveal .instant-prev
   padding: 7px;
   text-align: left;
 }
-.watchlist-suggestions button:hover { background: var(--row); }
+.watchlist-suggestions button:hover,
+.watchlist-suggestions button.active,
+.watchlist-suggestions button[aria-selected="true"] {
+  background: var(--row);
+}
 .watchlist-suggestions strong, .watchlist-suggestions small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .watchlist-suggestions small { color: var(--muted); font-size: 10px; margin-top: 2px; }
 .watchlist-chips { display: flex; flex-wrap: wrap; gap: 5px; min-height: 21px; }
