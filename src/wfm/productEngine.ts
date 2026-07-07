@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { fetchOfficialDropTables, relicSlugFromName, rewardSlugCandidates, type OfficialDropTables, type RelicRefinementTier, type RelicRewardEntry } from "./drops.js";
-import { fetchLiveActivitySnapshot, type LiveActivitySnapshot } from "./live.js";
+import { buildLiveSourceHealth, buildRunNowDashboard, fetchLiveActivitySnapshot, type LiveActivitySnapshot } from "./live.js";
 import { slugify } from "./opportunities.js";
 import type { MarketItem, WarframeMarketClient } from "./client.js";
 import type { ArcaneOrder } from "./types.js";
@@ -32,7 +32,7 @@ import type {
   SourceProvenance,
   TradabilityRule,
 } from "./product.js";
-import { clamp01, maxStatus, round, statusFromScore } from "./product.js";
+import { clamp01, maxStatus, round } from "./product.js";
 
 export interface ProductEngineOptions {
   userAgent?: string;
@@ -147,7 +147,7 @@ export async function buildProductDashboard(client: WarframeMarketClient, person
   const prime = await buildPrimeRelicDashboard(client, market, drops, live, personalization, options.maxRelics ?? 24);
   const expansion = await buildExpansionDashboard(client, market, personalization, options.maxExpansionItems ?? 16, generatedAt);
   const advanced = buildAdvancedAnalytics(personalization, expansion, generatedAt);
-  const runNow = buildRunNowDashboard(live, prime.fissures, generatedAt);
+  const runNow = buildRunNowDashboard(live, prime.fissures, generatedAt, new Date(generatedAt));
 
   const methodOutputs = buildMethodSummaries(prime, expansion, runNow);
   const opportunities = [
@@ -323,14 +323,6 @@ async function buildExpansionDashboard(client: WarframeMarketClient, market: Mar
   };
 }
 
-function buildRunNowDashboard(live: LiveActivitySnapshot, fissures: FissureRecommendation[], generatedAt: string): RunNowDashboard {
-  const fissureActivities = fissures.map((fissure) => ({ ...live.activities.find((activity) => activity.id === fissure.id), ...fissureToRunCard(fissure) }));
-  const nonFissure = live.activities.filter((activity) => !fissures.some((fissure) => fissure.id === activity.id));
-  const activities = [...fissureActivities, ...nonFissure]
-    .filter((activity) => !activity.expiresAt || Date.parse(activity.expiresAt) > Date.now())
-    .sort((left, right) => right.priority - left.priority);
-  return { generatedAt, activities, rejectedActivities: live.rejected, warnings: live.warnings };
-}
 
 function buildDataHealth(generatedAt: string, client: WarframeMarketClient, market: MarketContext, drops: OfficialDropTables, live: LiveActivitySnapshot, publicExport: PublicExportIngest, prime: PrimeRelicDashboard, warnings: string[]): DataHealthState {
   const wfm = client.health();
@@ -378,19 +370,7 @@ function buildDataHealth(generatedAt: string, client: WarframeMarketClient, mark
       fallback: "WFM gameRef identity bridge",
       warnings: publicExport.source.warnings,
     },
-    {
-      id: "live",
-      label: "Live Warframe activities",
-      status: live.activities.length > 0 ? "green" : live.rejected.length > 0 ? "yellow" : "red",
-      source: "warframestat",
-      url: "https://api.warframestat.us/pc/fissures",
-      lastSuccessAt: live.fetchedAt,
-      ttlSeconds: 5 * 60,
-      coverage: { scanned: live.activities.length, total: live.activities.length + live.rejected.length, label: "validated activities" },
-      warningCount: live.warnings.length + live.rejected.length,
-      fallback: "raw worldstate unavailable; wrapper validation active",
-      warnings: [...live.warnings, ...live.rejected.slice(0, 3).map((entry) => `${entry.title}: ${entry.reason}`)],
-    },
+    buildLiveSourceHealth(live, buildRunNowDashboard(live, prime.fissures, generatedAt, new Date(generatedAt)), new Date(generatedAt)),
     {
       id: "history",
       label: "TPE history and method cache",
@@ -908,23 +888,6 @@ function activityOpportunity(activity: RunActivityCard): ProductOpportunity {
   });
 }
 
-function fissureToRunCard(fissure: FissureRecommendation): RunActivityCard {
-  return {
-    id: fissure.id,
-    activityType: fissure.isStorm ? "void_storm" : "fissure",
-    title: `${fissure.node} ${fissure.tier}${fissure.isStorm ? " Void Storm" : " Fissure"}`,
-    node: fissure.node,
-    missionType: fissure.missionType,
-    evPerMinute: fissure.evPerMinute,
-    priority: fissure.priority,
-    expiresAt: fissure.expiresAt,
-    confidenceScore: fissure.confidence,
-    status: statusFromScore(fissure.confidence),
-    warnings: fissure.warnings,
-    source: fissure.source,
-    explanation: explanation("Run if this tier matches relics you should crack now.", `${fissure.evPerMinute}p EV/minute estimate.`, ["validated warframestat fissure", "Prime/Relic EV layer"], ["fissure tier, mission type speed, expiry, and Omnia/Void Storm multipliers"], undefined),
-  };
-}
 
 function explanation(recommendation: string, expectedOutcome: string, dataBasis: string[], mechanics: string[], snapshot: MarketSnapshot | undefined): Explanation {
   const liquidity = snapshot ? [`${snapshot.sellOrders.length} sell orders`, `${snapshot.buyOrders.length} buy orders`, `${snapshot.sellOrders.filter((order) => order.user.status === "ingame" || order.user.status === "online").length} online/ingame sellers`] : ["Liquidity unavailable or method-level." ];

@@ -3,6 +3,7 @@ import type { PriceHistoryStore, SignatureValuation as SignatureValuationResult,
 import { analyzeArcaneMarket } from "./arcanes.js";
 import { analyzeMarket, DEFAULT_CONFIG, deriveWeaponMarketIntel, MAX_REASONABLE_ROI, normalizeConfig, slugify, type MarketAnalysis } from "./opportunities.js";
 import { buildProductDashboard, createInitialProductDashboard } from "./productEngine.js";
+import { enforceRunNowWindow, overlayRunNowArtifact, type RunNowLiveArtifact } from "./live.js";
 import type { PersonalizationState, ProductDashboardState } from "./product.js";
 import { UserStore, type NotificationRuleInput, type PortfolioInput, type ProfileUpdate, type TodoInput, type TodoUpdate } from "./userStore.js";
 import type { ArcaneDashboardState, ArcaneItem, ArcaneOrder, ArcaneReferenceSnapshot, DashboardState, ReferenceSnapshot, RivenAuction, RivenWeapon, ScanStatus, TraderConfig, WeaponSummary } from "./types.js";
@@ -130,11 +131,13 @@ export class ThePlatExchangeService {
   readonly remotePollMs: number;
   private remoteState: DashboardState | null = null;
   private remoteReference: ReferenceSnapshot | null = null;
+  private remoteRunNowArtifact: RunNowLiveArtifact | null = null;
   private readonly remoteValuations = new Map<string, RemoteValuationEntry>();
   private readonly remoteVelocities = new Map<string, RemoteVelocityEntry>();
   private lastRemoteFetchAt = 0;
   private lastRemoteReferenceFetchAt = 0;
   private lastRemoteValuationsFetchAt = 0;
+  private lastRemoteRunNowFetchAt = 0;
   private scanGeneration = 0;
 
   constructor(options: ScannerOptions) {
@@ -161,11 +164,12 @@ export class ThePlatExchangeService {
     this.hydrateFromHistory();
   }
 
-  private remoteUrl(kind: "state" | "reference" | "valuations"): string | undefined {
+  private remoteUrl(kind: "state" | "reference" | "valuations" | "run-now"): string | undefined {
     if (kind === "state" && this.remoteDataUrl) return this.remoteDataUrl;
     if (!this.remoteDataBase) return undefined;
     if (kind === "state") return `${this.remoteDataBase}/latest/state.json`;
     if (kind === "reference") return `${this.remoteDataBase}/reference/current.json`;
+    if (kind === "run-now") return `${this.remoteDataBase}/latest/run-now.json`;
     return `${this.remoteDataBase}/valuations/latest.json`;
   }
 
@@ -184,11 +188,13 @@ export class ThePlatExchangeService {
     this.mode = next;
     this.remoteState = null;
     this.remoteReference = null;
+    this.remoteRunNowArtifact = null;
     this.remoteValuations.clear();
     this.remoteVelocities.clear();
     this.lastRemoteFetchAt = 0;
     this.lastRemoteReferenceFetchAt = 0;
     this.lastRemoteValuationsFetchAt = 0;
+    this.lastRemoteRunNowFetchAt = 0;
     this.status = {
       ...this.status,
       running: false,
@@ -292,6 +298,7 @@ export class ThePlatExchangeService {
     const promises: Array<Promise<void>> = [this.pollRemoteState(stateUrl)];
     if (now - this.lastRemoteReferenceFetchAt > 5 * 60_000) promises.push(this.pollRemoteReference());
     if (now - this.lastRemoteValuationsFetchAt > 5 * 60_000) promises.push(this.pollRemoteValuations());
+    if (now - this.lastRemoteRunNowFetchAt > 60_000) promises.push(this.pollRemoteRunNow());
     await Promise.all(promises);
   }
 
@@ -376,6 +383,22 @@ export class ThePlatExchangeService {
       this.lastRemoteValuationsFetchAt = Date.now();
     } catch {
       // silently skip; next cycle will retry
+    }
+  }
+
+  private async pollRemoteRunNow(): Promise<void> {
+    const url = this.remoteUrl("run-now");
+    if (!url) return;
+    try {
+      const response = await fetch(url);
+      if (!response.ok) return;
+      const parsed = await response.json();
+      if (!isRunNowLiveArtifact(parsed)) return;
+      this.remoteRunNowArtifact = parsed;
+      this.lastRemoteRunNowFetchAt = Date.now();
+      this.emitStateImmediate();
+    } catch {
+      // silently skip; the cold state remains usable and the next live poll retries
     }
   }
 
@@ -634,7 +657,7 @@ export class ThePlatExchangeService {
         opportunities: [],
         instantWins: [],
         weaponSummaries: [],
-        product: this.productState,
+        product: enforceRunNowWindow(this.productState),
       };
     }
     const weapons = this.reference?.rivenWeapons ?? [];
@@ -668,18 +691,19 @@ export class ThePlatExchangeService {
       instantWins: analysis.instantWins,
       weaponSummaries: analysis.weaponSummaries,
       arcanes: this.getArcaneState(),
-      product: this.productState,
+      product: enforceRunNowWindow(this.productState),
     };
   }
 
   getProductState(): ProductDashboardState {
-    return this.mode === "remote" ? this.productForRemoteState() : this.productState;
+    return this.mode === "remote" ? this.productForRemoteState() : enforceRunNowWindow(this.productState);
   }
 
   private productForRemoteState(): ProductDashboardState {
     const waiting = this.productState.dataHealth.sources.some((source) => source.id === "product" && source.warnings.some((warning) => warning.includes("Waiting for product data refresh")));
-    if (waiting && this.remoteState?.product) return this.remoteState.product;
-    return this.productState;
+    const base = waiting && this.remoteState?.product ? this.remoteState.product : this.productState;
+    const current = enforceRunNowWindow(base);
+    return this.remoteRunNowArtifact ? overlayRunNowArtifact(current, this.remoteRunNowArtifact) : current;
   }
 
   async updateUserProfile(update: ProfileUpdate): Promise<ProductDashboardState> {
@@ -1045,4 +1069,23 @@ function inferRemoteBase(dataUrl: string | undefined): string | undefined {
     .replace(/\/latest\/state\.json$/, "")
     .replace(/\/latest\/opportunities\.json$/, "")
     .replace(/\/state\.json$/, "");
+}
+
+function isRunNowLiveArtifact(value: unknown): value is RunNowLiveArtifact {
+  if (!value || typeof value !== "object") return false;
+  if (!("schemaVersion" in value) || value.schemaVersion !== 1) return false;
+  if (!("generatedAt" in value) || typeof value.generatedAt !== "string") return false;
+  if (!("live" in value) || !value.live || typeof value.live !== "object") return false;
+  const live = value.live;
+  if (!("id" in live) || live.id !== "live") return false;
+  if (!("status" in live) || (live.status !== "green" && live.status !== "yellow" && live.status !== "red")) return false;
+  if (!("warnings" in live) || !Array.isArray(live.warnings)) return false;
+  if (!("ttlSeconds" in live) || typeof live.ttlSeconds !== "number") return false;
+  if (!("runNow" in value) || !value.runNow || typeof value.runNow !== "object") return false;
+  const runNow = value.runNow;
+  if (!("generatedAt" in runNow) || typeof runNow.generatedAt !== "string") return false;
+  if (!("activities" in runNow) || !Array.isArray(runNow.activities)) return false;
+  if (!("rejectedActivities" in runNow) || !Array.isArray(runNow.rejectedActivities)) return false;
+  if (!("warnings" in runNow) || !Array.isArray(runNow.warnings)) return false;
+  return true;
 }

@@ -1,8 +1,9 @@
-import type { FissureRecommendation, RunActivityCard, SourceProvenance } from "./product.js";
-import { clamp01, round, statusFromScore } from "./product.js";
+import type { FissureRecommendation, ProductDashboardState, ProductOpportunity, RunActivityCard, RunNowDashboard, SourceHealth, SourceProvenance } from "./product.js";
+import { clamp01, maxStatus, round, statusFromScore } from "./product.js";
 
 export const WARFRAMESTAT_BASE = "https://api.warframestat.us/pc";
-const LIVE_TTL_SECONDS = 5 * 60;
+export const LIVE_TTL_SECONDS = 5 * 60;
+export const RUN_NOW_MAX_SOURCE_AGE_MS = 60 * 60 * 1000;
 const KNOWN_MISSION_TYPES = new Set([
   "Alchemy",
   "Assassination",
@@ -57,6 +58,13 @@ export interface LiveActivitySnapshot {
   warnings: string[];
 }
 
+export interface RunNowLiveArtifact {
+  schemaVersion: 1;
+  generatedAt: string;
+  live: SourceHealth;
+  runNow: RunNowDashboard;
+}
+
 export async function fetchLiveActivitySnapshot(userAgent: string, fetcher: typeof fetch = fetch, now = new Date()): Promise<LiveActivitySnapshot> {
   const fetchedAt = now.toISOString();
   const warnings: string[] = [];
@@ -108,6 +116,213 @@ export async function fetchLiveActivitySnapshot(userAgent: string, fetcher: type
 
   activities.sort((left, right) => right.priority - left.priority || right.evPerMinute - left.evPerMinute);
   return { fetchedAt, fissures, activities, rejected, sources, warnings };
+}
+
+export function buildRunNowDashboard(live: LiveActivitySnapshot, fissures: readonly FissureRecommendation[] = live.fissures, generatedAt = live.fetchedAt, now = new Date()): RunNowDashboard {
+  const liveActivityById = new Map(live.activities.map((activity) => [activity.id, activity]));
+  const fissureIds = new Set(fissures.map((fissure) => fissure.id));
+  const fissureActivities = fissures.map((fissure) => ({ ...liveActivityById.get(fissure.id), ...fissureToActivity(fissure) }));
+  const nonFissure = live.activities.filter((activity) => !fissureIds.has(activity.id));
+  const dashboard: RunNowDashboard = {
+    generatedAt,
+    activities: [...fissureActivities, ...nonFissure].sort((left, right) => right.priority - left.priority),
+    rejectedActivities: live.rejected,
+    warnings: live.warnings,
+  };
+  return pruneRunNowDashboard(dashboard, now);
+}
+
+export function buildLiveSourceHealth(live: LiveActivitySnapshot, runNow: RunNowDashboard = buildRunNowDashboard(live), now = new Date()): SourceHealth {
+  return runNowSourceHealth(live.fetchedAt, runNow, live.rejected, live.warnings, now);
+}
+
+export function buildRunNowLiveArtifact(live: LiveActivitySnapshot, generatedAt = new Date().toISOString(), now = new Date()): RunNowLiveArtifact {
+  const runNow = buildRunNowDashboard(live, live.fissures, generatedAt, now);
+  return {
+    schemaVersion: 1,
+    generatedAt,
+    live: buildLiveSourceHealth(live, runNow, now),
+    runNow,
+  };
+}
+
+export function overlayRunNowArtifact(product: ProductDashboardState, artifact: RunNowLiveArtifact, now = new Date()): ProductDashboardState {
+  const artifactFetchedAt = artifact.live.lastSuccessAt ?? artifact.live.lastFailureAt ?? artifact.generatedAt;
+  const artifactStale = isOlderThanRunNowWindow(artifactFetchedAt, now);
+  const pruned = pruneRunNowDashboard(artifact.runNow, now);
+  const runNow = artifactStale
+    ? {
+        ...pruned,
+        activities: [],
+        warnings: appendUniqueWarning(pruned.warnings, "Run Now live artifact is older than one hour; live activities are hidden until the next live refresh."),
+      }
+    : pruned;
+  const live = normalizeRunNowSourceHealth(artifact.live, runNow, artifact.generatedAt, now);
+  return applyRunNowState(product, runNow, live, artifact.generatedAt, true);
+}
+
+export function enforceRunNowWindow(product: ProductDashboardState, now = new Date()): ProductDashboardState {
+  const runNow = pruneRunNowDashboard(product.runNow, now);
+  const existingLive = product.dataHealth.sources.find((source) => source.id === "live");
+  if (!existingLive) {
+    return runNow === product.runNow ? product : { ...product, runNow };
+  }
+  const live = normalizeRunNowSourceHealth(existingLive, runNow, runNow.generatedAt, now);
+  return applyRunNowState(product, runNow, live, runNow.generatedAt, false);
+}
+
+export function pruneRunNowDashboard(runNow: RunNowDashboard, now = new Date()): RunNowDashboard {
+  const nowMs = now.getTime();
+  const activities = runNow.activities.filter((activity) => {
+    if (!activity.expiresAt) return true;
+    const expiryMs = Date.parse(activity.expiresAt);
+    return Number.isFinite(expiryMs) && expiryMs > nowMs;
+  });
+  if (activities.length === runNow.activities.length) return runNow;
+  const removed = runNow.activities.length - activities.length;
+  return {
+    ...runNow,
+    activities,
+    warnings: appendUniqueWarning(runNow.warnings, `Removed ${removed} expired live ${removed === 1 ? "activity" : "activities"} at read time.`),
+  };
+}
+
+function applyRunNowState(product: ProductDashboardState, runNow: RunNowDashboard, live: SourceHealth, generatedAt: string, bumpGeneratedAt: boolean): ProductDashboardState {
+  const sources = upsertSourceHealth(product.dataHealth.sources, live);
+  const dataHealth = {
+    ...product.dataHealth,
+    generatedAt: bumpGeneratedAt ? laterIso(product.dataHealth.generatedAt, generatedAt) : product.dataHealth.generatedAt,
+    status: maxStatus(sources.map((entry) => entry.status)),
+    sources,
+  };
+  return {
+    ...product,
+    generatedAt: bumpGeneratedAt ? laterIso(product.generatedAt, generatedAt) : product.generatedAt,
+    dataHealth,
+    methods: product.methods.map((method) => {
+      if (method.id !== "run_now") return method;
+      const { bestOpportunityId, ...baseMethod } = method;
+      return {
+        ...baseMethod,
+        status: live.status,
+        opportunityCount: runNow.activities.length,
+        warnings: runNow.warnings,
+        ...(runNow.activities.length > 0 ? { bestOpportunityId: "run_now" } : {}),
+      };
+    }),
+    opportunities: [
+      ...product.opportunities.filter((opportunity) => opportunity.methodId !== "run_now"),
+      ...runNow.activities.map(runActivityOpportunity),
+    ].sort(compareProductOpportunities),
+    runNow,
+  };
+}
+
+function runNowSourceHealth(fetchedAt: string, runNow: RunNowDashboard, rejected: LiveActivitySnapshot["rejected"], sourceWarnings: readonly string[], now: Date): SourceHealth {
+  const stale = isOlderThanRunNowWindow(fetchedAt, now);
+  const warnings = mergeWarnings(sourceWarnings, rejected.slice(0, 3).map((entry) => `${entry.title}: ${entry.reason}`));
+  const finalWarnings = stale
+    ? appendUniqueWarning(warnings, "Live activity source is older than one hour; Run Now is hidden until the live feed refreshes.")
+    : warnings;
+  const status: SourceHealth["status"] = stale ? "red" : runNow.activities.length > 0 ? finalWarnings.length > 0 ? "yellow" : "green" : rejected.length > 0 ? "yellow" : "red";
+  const health: SourceHealth = {
+    id: "live",
+    label: "Live Warframe activities",
+    status,
+    source: "warframestat",
+    url: "https://api.warframestat.us/pc/fissures",
+    lastSuccessAt: fetchedAt,
+    ttlSeconds: LIVE_TTL_SECONDS,
+    coverage: { scanned: runNow.activities.length, total: runNow.activities.length + rejected.length, label: "validated activities" },
+    warningCount: finalWarnings.length,
+    fallback: "raw worldstate unavailable; wrapper validation active",
+    warnings: finalWarnings,
+  };
+  if (stale) health.staleAgeSeconds = Math.max(0, Math.floor((now.getTime() - Date.parse(fetchedAt)) / 1000));
+  return health;
+}
+
+function normalizeRunNowSourceHealth(source: SourceHealth, runNow: RunNowDashboard, artifactGeneratedAt: string, now: Date): SourceHealth {
+  const fetchedAt = source.lastSuccessAt ?? source.lastFailureAt ?? artifactGeneratedAt;
+  const stale = isOlderThanRunNowWindow(fetchedAt, now);
+  const warnings = stale
+    ? appendUniqueWarning(mergeWarnings(source.warnings, runNow.warnings), "Live activity source is older than one hour; Run Now is hidden until the live feed refreshes.")
+    : mergeWarnings(source.warnings, runNow.warnings);
+  const status: SourceHealth["status"] = stale ? "red" : runNow.activities.length > 0 ? warnings.length > 0 ? "yellow" : "green" : source.status === "red" ? "red" : runNow.rejectedActivities.length > 0 ? "yellow" : "red";
+  const health: SourceHealth = {
+    ...source,
+    id: "live",
+    label: "Live Warframe activities",
+    status,
+    source: "warframestat",
+    url: source.url ?? "https://api.warframestat.us/pc/fissures",
+    lastSuccessAt: fetchedAt,
+    ttlSeconds: LIVE_TTL_SECONDS,
+    coverage: { scanned: runNow.activities.length, total: runNow.activities.length + runNow.rejectedActivities.length, label: "validated activities" },
+    warningCount: warnings.length,
+    warnings,
+  };
+  if (stale) health.staleAgeSeconds = Math.max(0, Math.floor((now.getTime() - Date.parse(fetchedAt)) / 1000));
+  return health;
+}
+
+function upsertSourceHealth(sources: readonly SourceHealth[], live: SourceHealth): SourceHealth[] {
+  const next = sources.map((source) => source.id === "live" ? live : source);
+  if (!sources.some((source) => source.id === "live")) next.push(live);
+  return next;
+}
+
+function mergeWarnings(left: readonly string[], right: readonly string[]): string[] {
+  const merged = [...left];
+  for (const warning of right) {
+    if (!merged.includes(warning)) merged.push(warning);
+  }
+  return merged;
+}
+
+function appendUniqueWarning(warnings: readonly string[], warning: string): string[] {
+  const next = [...warnings];
+  if (!next.includes(warning)) next.push(warning);
+  return next;
+}
+
+function laterIso(left: string, right: string): string {
+  const leftMs = Date.parse(left);
+  const rightMs = Date.parse(right);
+  if (!Number.isFinite(leftMs)) return right;
+  if (!Number.isFinite(rightMs)) return left;
+  return rightMs > leftMs ? right : left;
+}
+
+function isOlderThanRunNowWindow(fetchedAt: string, now: Date): boolean {
+  const fetchedAtMs = Date.parse(fetchedAt);
+  return !Number.isFinite(fetchedAtMs) || now.getTime() - fetchedAtMs > RUN_NOW_MAX_SOURCE_AGE_MS;
+}
+
+function runActivityOpportunity(activity: RunActivityCard): ProductOpportunity {
+  return {
+    id: `run:${activity.id}`,
+    methodId: "run_now",
+    title: activity.title,
+    action: "run_mission",
+    itemRefs: [],
+    expectedPlat: round(activity.evPerMinute * 10, 2),
+    timeToExecuteMinutes: 10,
+    liquidityScore: 0.5,
+    confidenceScore: round(clamp01(activity.confidenceScore), 4),
+    riskScore: round(clamp01(1 - activity.confidenceScore), 4),
+    freshness: [activity.source],
+    assumptions: ["EV/minute is a method score combining mission speed, relic economics, and live expiry."],
+    warnings: activity.warnings,
+    explanation: activity.explanation,
+    ...(activity.expiresAt !== undefined ? { expiresAt: activity.expiresAt } : {}),
+  };
+}
+
+function compareProductOpportunities(left: ProductOpportunity, right: ProductOpportunity): number {
+  const leftScore = (left.expectedProfitPlat ?? left.expectedPlat) * left.confidenceScore * Math.max(0.2, left.liquidityScore) * (1 - left.riskScore * 0.4);
+  const rightScore = (right.expectedProfitPlat ?? right.expectedPlat) * right.confidenceScore * Math.max(0.2, right.liquidityScore) * (1 - right.riskScore * 0.4);
+  return rightScore - leftScore;
 }
 
 export function validateFissures(entries: readonly WarframestatFissure[], fetchedAt = new Date().toISOString(), now = new Date()): { accepted: FissureRecommendation[]; rejected: LiveActivitySnapshot["rejected"]; warnings: string[] } {

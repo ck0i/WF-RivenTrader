@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { ThePlatExchangeService } from "../src/wfm/scanner.js";
+import { createInitialProductDashboard } from "../src/wfm/productEngine.js";
 import { DEFAULT_CONFIG } from "../src/wfm/opportunities.js";
 import type { WarframeMarketClient } from "../src/wfm/client.js";
 import type { AuctionOwner, DashboardState, InstantWin, Opportunity } from "../src/wfm/types.js";
@@ -17,6 +18,77 @@ const owner: AuctionOwner = {
 const normal = opportunity("normal-roi", 10, 180);
 const edgeRounded = opportunity("edge-rounded-roi", 10, 185.004, 17.5);
 const insane = opportunity("insane-roi", 10, 970, 96);
+const staleProduct = createInitialProductDashboard();
+staleProduct.generatedAt = "2026-07-06T00:00:00.000Z";
+staleProduct.dataHealth = {
+  ...staleProduct.dataHealth,
+  generatedAt: "2026-07-06T00:00:00.000Z",
+  sources: [{
+    id: "live",
+    label: "Live Warframe activities",
+    status: "red",
+    source: "warframestat",
+    lastSuccessAt: "2026-07-06T00:00:00.000Z",
+    ttlSeconds: 300,
+    warningCount: 1,
+    warnings: ["stale cold product live row"],
+  }],
+};
+staleProduct.methods = [{
+  id: "run_now",
+  label: "Run Now",
+  description: "stale live method",
+  status: "red",
+  opportunityCount: 0,
+  sourceIds: ["live"],
+  warnings: ["stale cold product method"],
+}];
+
+const runNowGeneratedAt = new Date().toISOString();
+const runNowExpiresAt = new Date(Date.now() + 45 * 60_000).toISOString();
+const remoteRunNowArtifact = {
+  schemaVersion: 1,
+  generatedAt: runNowGeneratedAt,
+  live: {
+    id: "live",
+    label: "Live Warframe activities",
+    status: "green",
+    source: "warframestat",
+    lastSuccessAt: runNowGeneratedAt,
+    ttlSeconds: 300,
+    coverage: { scanned: 1, total: 1, label: "validated activities" },
+    warningCount: 0,
+    warnings: [],
+  },
+  runNow: {
+    generatedAt: runNowGeneratedAt,
+    activities: [{
+      id: "remote-live-fissure",
+      activityType: "fissure",
+      title: "Remote Live Fissure",
+      node: "Ukko",
+      missionType: "Capture",
+      evPerMinute: 8,
+      priority: 8,
+      expiresAt: runNowExpiresAt,
+      confidenceScore: 0.82,
+      status: "green",
+      warnings: [],
+      source: { source: "warframestat", fetchedAt: runNowGeneratedAt, ttlSeconds: 300, confidence: "medium", warnings: [] },
+      explanation: {
+        recommendation: "Run the fresh remote fissure.",
+        expectedOutcome: "Fresh run-now activity remains visible.",
+        dataBasis: ["run-now live artifact"],
+        mechanics: ["remote overlay"],
+        liquidity: ["method-level"],
+        risks: [],
+        alternatives: [],
+      },
+    }],
+    rejectedActivities: [],
+    warnings: [],
+  },
+};
 const remoteState: DashboardState = {
   generatedAt: "2026-07-06T00:00:00.000Z",
   refreshMs: 60_000,
@@ -36,6 +108,7 @@ const remoteState: DashboardState = {
   opportunities: [insane, edgeRounded, normal],
   instantWins: [instantWin(insane), instantWin(edgeRounded), instantWin(normal)],
   weaponSummaries: [],
+  product: staleProduct,
 };
 
 const originalFetch = globalThis.fetch;
@@ -53,13 +126,14 @@ const fetchMock: typeof fetch = async (input) => {
   if (url.endsWith("/latest/state.json")) return jsonResponse(remoteState);
   if (url.endsWith("/reference/current.json")) return jsonResponse({ rivenWeapons: [], rivenAttributes: [], versions: {}, loadedAt: "2026-07-06T00:00:00.000Z" });
   if (url.endsWith("/valuations/latest.json")) return jsonResponse({ valuations: {}, velocities: {} });
+  if (url.endsWith("/latest/run-now.json")) return jsonResponse(remoteRunNowArtifact);
   return new Response(JSON.stringify({ error: "unexpected url" }), { status: 404 });
 };
 
 globalThis.fetch = fetchMock;
 try {
   unsubscribe = service.subscribe((state) => {
-    if (state.status.initialized && state.status.reason === "remote" && !state.status.running) ready.resolve(state);
+    if (state.status.initialized && state.status.reason === "remote" && !state.status.running && state.product?.runNow.activities.some((activity) => activity.id === "remote-live-fissure")) ready.resolve(state);
   });
   service.start();
   const state = await ready.promise;
@@ -68,6 +142,8 @@ try {
   assert.equal(state.opportunities[0]?.roi, 17, "remote getState should preserve under-cap ROI entries");
   assert.equal(state.totals.opportunities, 1, "remote totals must match filtered opportunities");
   assert.deepEqual(state.instantWins?.map((entry) => entry.opportunity.auctionId), ["normal-roi"], "remote instant wins must remove ROI outliers too");
+  assert.equal(state.product?.runNow.activities[0]?.id, "remote-live-fissure", "remote mode must overlay the live Run Now artifact onto stale cold product data");
+  assert.equal(state.product?.dataHealth.sources.find((source) => source.id === "live")?.status, "green", "remote live health must come from the live artifact");
 } finally {
   unsubscribe();
   service.stop();
