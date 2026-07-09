@@ -28,6 +28,7 @@ interface LaunchConfig {
   historyDbPath: string;
   remoteDataUrl: string | undefined;
   remoteDataBase: string | undefined;
+  remotePollMs: number;
   remoteRunNowPollMs: number;
   traderConfig: Partial<TraderConfig>;
 }
@@ -62,9 +63,10 @@ export async function main(): Promise<void> {
     ...(history ? { history } : {}),
     ...(launch.remoteDataUrl ? { remoteDataUrl: launch.remoteDataUrl } : {}),
     ...(launch.remoteDataBase ? { remoteDataBase: launch.remoteDataBase } : {}),
+    remotePollMs: launch.remotePollMs,
     remoteRunNowPollMs: launch.remoteRunNowPollMs,
   });
-  const server = createAppServer(service, launch.remoteDataUrl ? { remoteFallback: { url: launch.remoteDataUrl } } : {});
+  const server = createAppServer(service, launch.remoteDataUrl ? { remoteFallback: { url: launch.remoteDataUrl, cacheMs: launch.remotePollMs, runNowCacheMs: launch.remoteRunNowPollMs } } : {});
   await listen(server, launch.port, launch.host);
   const url = `http://${launch.host}:${launch.port}`;
   console.log(`ThePlatExchange dashboard: ${url}`);
@@ -117,6 +119,7 @@ export function readLaunchConfig(args: string[], env: NodeJS.ProcessEnv): Launch
     ? undefined
     : env.WFM_DATA_BASE ?? "https://raw.githubusercontent.com/ck0i/ThePlatExchange/data/data";
   const remoteRunNowPollMs = readNumberEnv(env, "WFM_RUN_NOW_POLL_MS", 5_000);
+  const remotePollMs = readNumberEnv(env, "WFM_REMOTE_POLL_MS", 5_000);
 
   return {
     host,
@@ -137,6 +140,7 @@ export function readLaunchConfig(args: string[], env: NodeJS.ProcessEnv): Launch
     historyDbPath,
     remoteDataUrl,
     remoteDataBase,
+    remotePollMs,
     remoteRunNowPollMs,
     traderConfig,
   };

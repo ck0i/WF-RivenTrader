@@ -162,7 +162,7 @@ export class ThePlatExchangeService {
     this.emitDebounceMs = Math.max(100, options.emitDebounceMs ?? 1500);
     this.remoteDataUrl = options.remoteDataUrl;
     this.remoteDataBase = options.remoteDataBase ?? inferRemoteBase(options.remoteDataUrl);
-    this.remotePollMs = Math.max(15_000, options.remotePollMs ?? 45_000);
+    this.remotePollMs = Math.max(5_000, options.remotePollMs ?? 5_000);
     this.remoteRunNowPollMs = Math.max(5_000, options.remoteRunNowPollMs ?? 5_000);
     this.hydrateFromHistory();
   }
@@ -308,7 +308,7 @@ export class ThePlatExchangeService {
 
   private async pollRemoteState(url: string): Promise<void> {
     try {
-      const response = await fetch(url);
+      const response = await fetch(cacheBustedUrl(url), { cache: "no-store", headers: { "Cache-Control": "no-cache", Pragma: "no-cache" } });
       if (!response.ok) {
         this.status.lastError = `remote state ${response.status}`;
         this.emitStateImmediate();

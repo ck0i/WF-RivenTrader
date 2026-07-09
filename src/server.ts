@@ -114,7 +114,7 @@ class RemoteFallback {
   constructor(options: RemoteFallbackOptions) {
     this.url = options.url;
     this.runNowUrl = options.runNowUrl ?? inferRunNowUrl(options.url);
-    this.cacheMs = options.cacheMs ?? 60_000;
+    this.cacheMs = Math.max(1_000, options.cacheMs ?? 5_000);
     this.runNowCacheMs = Math.max(1_000, options.runNowCacheMs ?? 5_000);
   }
 
@@ -122,7 +122,7 @@ class RemoteFallback {
     const now = Date.now();
     if (this.cached && now - this.lastFetch < this.cacheMs) return await this.cachedWithCurrentRunNowWindow();
     try {
-      const response = await fetch(this.url);
+      const response = await fetch(cacheBustedUrl(this.url), { cache: "no-store", headers: { "Cache-Control": "no-cache", Pragma: "no-cache" } });
       if (!response.ok) return await this.cachedWithCurrentRunNowWindow();
       const parsed = await response.json();
       const withRunNow = await this.overlayRunNow(parsed);

@@ -121,11 +121,15 @@ const service = new ThePlatExchangeService({
 });
 const ready = Promise.withResolvers<DashboardState>();
 let unsubscribe = (): void => {};
+const stateFetchUrls: string[] = [];
 const runNowFetchUrls: string[] = [];
 const fetchMock: typeof fetch = async (input) => {
   const url = fetchUrl(input);
   const parsedUrl = new URL(url);
-  if (parsedUrl.pathname.endsWith("/latest/state.json")) return jsonResponse(remoteState);
+  if (parsedUrl.pathname.endsWith("/latest/state.json")) {
+    stateFetchUrls.push(url);
+    return jsonResponse(remoteState);
+  }
   if (parsedUrl.pathname.endsWith("/reference/current.json")) return jsonResponse({ rivenWeapons: [], rivenAttributes: [], versions: {}, loadedAt: "2026-07-06T00:00:00.000Z" });
   if (parsedUrl.pathname.endsWith("/valuations/latest.json")) return jsonResponse({ valuations: {}, velocities: {} });
   if (parsedUrl.pathname.endsWith("/latest/run-now.json")) {
@@ -151,6 +155,8 @@ try {
   assert.equal(state.product?.dataHealth.sources.find((source) => source.id === "live")?.status, "green", "remote live health must come from the live artifact");
   assert.ok(runNowFetchUrls.length > 0, "remote mode must fetch the standalone Run Now artifact");
   assert.ok(runNowFetchUrls.every((url) => new URL(url).searchParams.has("_")), "remote Run Now artifact fetches must cache-bust raw GitHub URLs");
+  assert.ok(stateFetchUrls.length > 0, "remote mode must fetch the remote state artifact");
+  assert.ok(stateFetchUrls.every((url) => new URL(url).searchParams.has("_")), "remote state artifact fetches must cache-bust raw GitHub URLs");
 } finally {
   unsubscribe();
   service.stop();

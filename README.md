@@ -109,6 +109,8 @@ Most settings can be changed in the UI. Environment variables are useful for sta
 | `WFM_HISTORY_DB` | `.cache/the-plat-exchange/history.db` | Local history database path. |
 | `WFM_DATA_URL` | project data feed | Remote state JSON URL. Set `off` to disable. |
 | `WFM_DATA_BASE` | project data root | Remote valuation/velocity data root. Set `off` to disable. |
+| `WFM_REMOTE_POLL_MS` | `5000` | Remote cold-state polling interval; service enforces a minimum of 5000 ms. |
+| `WFM_RUN_NOW_POLL_MS` | `5000` | Remote Run Now artifact polling interval; service enforces a minimum of 5000 ms. |
 
 Example:
 
