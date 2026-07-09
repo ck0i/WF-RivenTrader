@@ -145,8 +145,6 @@ let sortState = { key: "expectedProfit", direction: "desc" };
 let heroOpportunity = null;
 let spotlightTimer = null;
 let spotlightCloseTimer = 0;
-let spotlightMorphNode = null;
-let spotlightMorphAnimation = null;
 let motionRevealTimer = 0;
 let spotlightItems = [];
 let spotlightIndex = -1;
@@ -220,8 +218,6 @@ const OVERLAY_PAGE_SIZE = 10;
 const OPPORTUNITY_PAGE_SIZE = 25;
 const HEARTBEAT_MS = 30_000;
 const SPOTLIGHT_CLOSE_MS = 110;
-const SPOTLIGHT_MORPH_MS = 160;
-const SPOTLIGHT_CLONE_FADE_MS = 45;
 const MOTION_REVEAL_MS = 220;
 const FILTERS_SCROLL_REVEAL_MS = 520;
 const NUMBER_FORMATTER = new Intl.NumberFormat();
@@ -2365,91 +2361,6 @@ function prefersReducedMotion() {
   return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
 }
 
-function clearSpotlightMorph(removeMorphingClass = true) {
-  if (spotlightMorphAnimation) {
-    spotlightMorphAnimation.cancel();
-    spotlightMorphAnimation = null;
-  }
-  if (spotlightMorphNode) {
-    spotlightMorphNode.remove();
-    spotlightMorphNode = null;
-  }
-  if (removeMorphingClass) elements.spotlightOverlay?.classList.remove("morphing");
-}
-
-function runSpotlightMorph() {
-  const overlay = elements.spotlightOverlay;
-  const trigger = elements.spotlightTrigger;
-  const inputRow = elements.spotlight?.querySelector(".spotlight-input-row");
-  if (!overlay || !trigger || !inputRow || prefersReducedMotion()) return false;
-  clearSpotlightMorph(false);
-
-  const triggerRect = trigger.getBoundingClientRect();
-  const rowRect = inputRow.getBoundingClientRect();
-  if (triggerRect.width <= 0 || triggerRect.height <= 0 || rowRect.width <= 0 || rowRect.height <= 0) return false;
-
-  const clone = document.createElement("div");
-  clone.className = "spotlight-morph";
-  clone.setAttribute("aria-hidden", "true");
-  clone.innerHTML = trigger.innerHTML;
-  clone.style.left = `${triggerRect.left}px`;
-  clone.style.top = `${triggerRect.top}px`;
-  clone.style.width = `${triggerRect.width}px`;
-  clone.style.height = `${triggerRect.height}px`;
-  overlay.appendChild(clone);
-  spotlightMorphNode = clone;
-
-  if (typeof clone.animate !== "function") {
-    clone.remove();
-    spotlightMorphNode = null;
-    return false;
-  }
-  const deltaX = rowRect.left - triggerRect.left;
-  const deltaY = rowRect.top - triggerRect.top;
-  const scaleX = rowRect.width / triggerRect.width;
-  const scaleY = rowRect.height / triggerRect.height;
-  const targetTransform = `translate3d(${deltaX}px, ${deltaY}px, 0) scale(${scaleX}, ${scaleY})`;
-  const animation = clone.animate([
-    { transform: "translate3d(0, 0, 0) scale(1)" },
-    { transform: targetTransform },
-  ], {
-    duration: SPOTLIGHT_MORPH_MS,
-    easing: "cubic-bezier(.16, 1, .3, 1)",
-    fill: "both",
-  });
-  spotlightMorphAnimation = animation;
-  let morphFinished = false;
-  const finish = () => {
-    if (morphFinished) return;
-    morphFinished = true;
-    const ownsMorph = spotlightMorphNode === clone || spotlightMorphAnimation === animation;
-    if (!ownsMorph) return;
-    overlay.classList.remove("morphing");
-    if (spotlightMorphAnimation === animation) spotlightMorphAnimation = null;
-    const removeClone = () => {
-      if (spotlightMorphNode === clone) {
-        clone.remove();
-        spotlightMorphNode = null;
-      }
-    };
-    clone.animate([
-      { opacity: 1 },
-      { opacity: 0 },
-    ], {
-      duration: SPOTLIGHT_CLONE_FADE_MS,
-      easing: "cubic-bezier(.16, 1, .3, 1)",
-      fill: "forwards",
-    }).finished.then(removeClone, removeClone);
-    window.setTimeout(removeClone, SPOTLIGHT_CLONE_FADE_MS + 30);
-  };
-  if (animation.finished) animation.finished.then(finish, finish);
-  else {
-    animation.onfinish = finish;
-    animation.oncancel = finish;
-  }
-  window.setTimeout(finish, SPOTLIGHT_MORPH_MS + 40);
-  return true;
-}
 
 function moveSpotlightSelection(delta) {
   if (spotlightItems.length === 0) return;
@@ -2471,19 +2382,14 @@ function openSpotlightOverlay() {
     elements.spotlightInput?.focus();
     return;
   }
-  clearSpotlightMorph();
   overlay.classList.remove("closing", "opening", "morphing");
   overlay.hidden = false;
   document.body.classList.add("spotlight-active");
   const value = (elements.spotlightInput?.value ?? "").trim();
   if (value === "") renderSpotlightHints();
   else void updateSpotlight(value);
-  const shouldMorph = !prefersReducedMotion();
-  if (shouldMorph) overlay.classList.add("morphing");
   window.requestAnimationFrame(() => {
     overlay.classList.add("opening");
-    const didMorph = shouldMorph && runSpotlightMorph();
-    if (!didMorph) overlay.classList.remove("morphing");
     try {
       elements.spotlightInput?.focus({ preventScroll: true });
     } catch {
@@ -2515,7 +2421,6 @@ function closeSpotlightOverlay() {
   const overlay = elements.spotlightOverlay;
   document.body.classList.remove("spotlight-active");
   window.clearTimeout(spotlightCloseTimer);
-  clearSpotlightMorph();
   if (!overlay) {
     closeSpotlight();
     return;
