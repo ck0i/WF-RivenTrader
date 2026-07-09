@@ -176,7 +176,7 @@ let tickerHtmlCache = "";
 let chartTooltipKey = null;
 let chartTooltipSize = { width: 260, height: 120 };
 let filtersRevealTimer = 0;
-let lastOpportunityScrollTop = 0;
+let opportunityFiltersHidden = false;
 let pendingChartPointer = null;
 let chartPointerFrame = 0;
 let chartResizeFrame = 0;
@@ -223,6 +223,7 @@ const SPOTLIGHT_CLOSE_MS = 110;
 const SPOTLIGHT_MORPH_MS = 160;
 const SPOTLIGHT_CLONE_FADE_MS = 45;
 const MOTION_REVEAL_MS = 220;
+const FILTERS_SCROLL_REVEAL_MS = 520;
 const NUMBER_FORMATTER = new Intl.NumberFormat();
 const HTML_ESCAPE = { "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" };
 const WARFRAME_PAGE_BACKGROUNDS = Object.freeze([
@@ -307,26 +308,31 @@ function applyPageBackground(page) {
   elements.pageRoot.dataset.pageAccent = page;
 }
 
-function setOpportunityFiltersHidden(hidden) {
-  document.querySelector(".opportunities-grid")?.classList.toggle("filters-auto-hidden", hidden);
+function setOpportunityFiltersScrolling(hidden) {
+  if (opportunityFiltersHidden === hidden) return;
+  opportunityFiltersHidden = hidden;
+  document.querySelector(".opportunities-grid")?.classList.toggle("filters-scroll-hidden", hidden);
+}
+
+function resetOpportunityFilterVisibility() {
+  window.clearTimeout(filtersRevealTimer);
+  setOpportunityFiltersScrolling(false);
 }
 
 function handlePageRootScroll() {
   const root = elements.pageRoot;
   if (!root) return;
-  if (currentPage !== "opportunities") {
-    lastOpportunityScrollTop = root.scrollTop;
-    setOpportunityFiltersHidden(false);
+  if (currentPage !== "opportunities" || root.scrollTop < 24) {
+    resetOpportunityFilterVisibility();
     return;
   }
-  const nextTop = root.scrollTop;
-  const delta = nextTop - lastOpportunityScrollTop;
-  lastOpportunityScrollTop = nextTop;
   window.clearTimeout(filtersRevealTimer);
-  if (nextTop < 24) setOpportunityFiltersHidden(false);
-  else if (Math.abs(delta) > 3) setOpportunityFiltersHidden(true);
-  filtersRevealTimer = window.setTimeout(() => setOpportunityFiltersHidden(false), 720);
+  setOpportunityFiltersScrolling(true);
+  filtersRevealTimer = window.setTimeout(() => {
+    if (currentPage === "opportunities") setOpportunityFiltersScrolling(false);
+  }, FILTERS_SCROLL_REVEAL_MS);
 }
+
 
 function navigate(page, options = {}) {
   const pageChanged = currentPage !== page;
@@ -341,8 +347,7 @@ function navigate(page, options = {}) {
   }
   renderVisiblePageSurfaces();
   elements.pageRoot?.scrollTo({ top: 0, behavior: "auto" });
-  lastOpportunityScrollTop = 0;
-  setOpportunityFiltersHidden(false);
+  resetOpportunityFilterVisibility();
 }
 
 for (const button of elements.pageButtons) {

@@ -411,9 +411,9 @@ body.motion-reveal .fresh-card:nth-child(-n+5), body.motion-reveal .instant-prev
 .sort-pills button:active { transform: scale(.97); }
 .sort-pills button.sorted-asc::after { content: " ↑"; }
 .sort-pills button.sorted-desc::after { content: " ↓"; }
-.opportunities-grid { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; align-items: start; transition: grid-template-columns var(--motion-slow) var(--ease-out), gap var(--motion-slow) var(--ease-out); }
-.opportunities-grid.filters-auto-hidden { grid-template-columns: 0 minmax(0, 1fr); gap: 0; }
-.opportunities-grid.filters-auto-hidden .filters-card { opacity: 0; pointer-events: none; transform: translate3d(-18px, 0, 0) scale(.985); }
+.opportunities-grid { --filters-column-width: 300px; --filters-gap: 16px; display: grid; grid-template-columns: var(--filters-column-width) minmax(0, 1fr); gap: var(--filters-gap); align-items: start; transition: grid-template-columns var(--motion-slow) var(--ease-out), gap var(--motion-slow) var(--ease-out); }
+.opportunities-grid.filters-scroll-hidden .filters-card { opacity: 0; pointer-events: none; transform: translate3d(-14px, 0, 0) scale(.985); }
+.opportunities-grid.filters-scroll-hidden .opportunity-feed { transform: translateX(calc((var(--filters-column-width) + var(--filters-gap)) / -2)); }
 .filters-card { 
   min-width: 0;
   overflow: visible;
@@ -497,7 +497,7 @@ body.motion-reveal .fresh-card:nth-child(-n+5), body.motion-reveal .instant-prev
 .status-chip:active span { transform: scale(.97); }
 .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 4px; }
 .filters-card .actions { grid-template-columns: 1fr; }
-.opportunity-feed { container-type: inline-size; }
+.opportunity-feed { container-type: inline-size; transition: transform var(--motion-med) var(--ease-out); will-change: transform; }
 .opportunity-list { display: grid; gap: 8px; contain: layout paint style; }
 .opp-card { overflow: hidden; background: linear-gradient(180deg, #171720, #111118); border-color: rgba(255,255,255,.08); box-shadow: inset 3px 0 0 rgba(123,111,239,.34), var(--shadow-soft); }
 .opp-card.tier-A { box-shadow: inset 3px 0 0 rgba(74,222,128,.78), var(--shadow-soft); }
@@ -1017,7 +1017,7 @@ body.modal-open { overflow: hidden; }
   .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .home-panels { grid-template-columns: 1fr; }
   .opportunities-grid { grid-template-columns: 1fr; }
-  .opportunities-grid.filters-auto-hidden { grid-template-columns: 1fr; gap: 16px; }
+  .opportunities-grid.filters-scroll-hidden .opportunity-feed { transform: none; }
   .arcane-grid { grid-template-columns: 1fr; }
   .arcane-market-row { grid-template-columns: minmax(11.25rem, 1fr) repeat(2, auto); }
   .arcane-market-row > div:last-child { display: none; }
