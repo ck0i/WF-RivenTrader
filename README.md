@@ -165,7 +165,7 @@ Useful local endpoints:
 
 The workflows in `.github/workflows` can publish a data branch used by the default `remote` mode:
 
-- Cold scan every 30 minutes.
+- Cold scan approximately every 50 minutes; the workflow polls every 10 minutes, tracks the last cold scan start on the data branch, and only launches the 20-shard matrix when the 50-minute cadence gate passes.
 - Sentiment fetch every 6 hours.
 
 The one-shot scanner can also be run manually:

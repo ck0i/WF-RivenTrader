@@ -2,7 +2,8 @@ name: Cold scan
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    # Poll cheaply off the :00/:30 peak; the cadence job runs the 20-way cold matrix only after the previous start is 50+ minutes old.
+    - cron: "7-57/10 * * * *"
   workflow_dispatch:
 
 concurrency:
@@ -10,7 +11,123 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  cadence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      should_run: ${{ steps.cadence.outputs.should_run }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Decide cold scan cadence
+        id: cadence
+        env:
+          MIN_INTERVAL_SECONDS: "3000"
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          has_data_branch=false
+          if git ls-remote --exit-code --heads origin data > /dev/null 2>&1; then
+            has_data_branch=true
+            git fetch origin data:refs/remotes/origin/data
+            git worktree add data-tree origin/data
+          fi
+
+          last_started=""
+          if [ "${has_data_branch}" = "true" ]; then
+            last_started="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          def read_json(path: str):
+              try:
+                  return json.loads(Path(path).read_text())
+              except Exception:
+                  return None
+
+          marker = read_json("data-tree/data/ci/cold-scan-cadence.json")
+          if isinstance(marker, dict) and isinstance(marker.get("last_started_at"), str):
+              print(marker["last_started_at"])
+          else:
+              index = read_json("data-tree/data/index.json")
+              if isinstance(index, dict):
+                  cold = index.get("tiers", {}).get("cold", {})
+                  print(cold.get("last_run_at", "") if isinstance(cold, dict) else "")
+              else:
+                  print("")
+          PY
+          )"
+          fi
+
+          should_run=false
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            echo "Manual dispatch bypasses cadence gate."
+            should_run=true
+          elif [ -z "${last_started}" ]; then
+            echo "No previous cold scan timestamp found; running now."
+            should_run=true
+          else
+            last_started_epoch="$(date -u -d "${last_started}" +%s 2>/dev/null || true)"
+            if [ -z "${last_started_epoch}" ]; then
+              echo "Previous cold scan timestamp is invalid (${last_started}); running now."
+              should_run=true
+            else
+              now_epoch="$(date -u +%s)"
+              age_seconds="$((now_epoch - last_started_epoch))"
+              if [ "${age_seconds}" -ge "${MIN_INTERVAL_SECONDS}" ]; then
+                echo "Previous cold scan started ${age_seconds}s ago; running now."
+                should_run=true
+              else
+                echo "Previous cold scan started ${age_seconds}s ago; waiting for 50-minute cadence."
+              fi
+            fi
+          fi
+
+          echo "should_run=${should_run}" >> "${GITHUB_OUTPUT}"
+          if [ "${should_run}" != "true" ] || [ "${has_data_branch}" != "true" ]; then
+            exit 0
+          fi
+
+          now_iso="$(date -u +%FT%TZ)"
+          mkdir -p data-tree/data/ci
+          cat > data-tree/data/ci/cold-scan-cadence.json <<EOF
+          {
+            "schema_version": 1,
+            "last_started_at": "${now_iso}",
+            "workflow_run_id": "${GITHUB_RUN_ID}",
+            "workflow_run_attempt": "${GITHUB_RUN_ATTEMPT}",
+            "event": "${GITHUB_EVENT_NAME}"
+          }
+          EOF
+
+          cd data-tree
+          git add data/ci/cold-scan-cadence.json
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "ci(cold): mark scan start ${now_iso}"
+          for attempt in 1 2 3 4 5; do
+            if git push origin HEAD:data; then
+              exit 0
+            fi
+            git fetch origin data
+            if ! git rebase origin/data; then
+              git rebase --abort || true
+            fi
+            sleep $((attempt * 3))
+          done
+          exit 1
   scan-shard:
+    needs: cadence
+    if: needs.cadence.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
@@ -70,7 +187,8 @@ jobs:
 
   merge:
     runs-on: ubuntu-latest
-    needs: scan-shard
+    needs: [cadence, scan-shard]
+    if: needs.cadence.outputs.should_run == 'true'
     permissions:
       contents: write
     steps:
