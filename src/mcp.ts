@@ -41,6 +41,21 @@ interface JsonRpcRequest {
   params?: unknown;
 }
 
+export interface OpenAiToolDefinition {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+}
+
+export interface McpChatToolCallResult {
+  ok: boolean;
+  payload: Record<string, unknown>;
+}
+
+
 const LIVE_WINDOW_MS = 5 * 60_000;
 
 export class McpSseServer {
@@ -623,6 +638,33 @@ export class McpSseServer {
       name: String(tool.name),
       description: String(tool.description ?? ""),
     }));
+  }
+
+  describeOpenAiTools(): OpenAiToolDefinition[] {
+    return this.tools().map((tool) => {
+      const inputSchema = tool.inputSchema;
+      return {
+        type: "function",
+        function: {
+          name: String(tool.name),
+          description: String(tool.description ?? ""),
+          parameters: isRecord(inputSchema) ? inputSchema : { type: "object", properties: {}, additionalProperties: false },
+        },
+      };
+    });
+  }
+
+  async callToolForChat(name: string, args: Record<string, unknown>): Promise<McpChatToolCallResult> {
+    const response = await this.handleToolCall({
+      jsonrpc: "2.0",
+      id: "chat",
+      method: "tools/call",
+      params: { name, arguments: args },
+    });
+    const error = response.error;
+    if (isRecord(error)) return { ok: false, payload: { error } };
+    const result = response.result;
+    return { ok: true, payload: isRecord(result) ? result : { result } };
   }
 
   private tools(): Array<Record<string, unknown>> {

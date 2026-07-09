@@ -14,6 +14,7 @@ It reads public Warframe.market riven data, enriches weapons with warframestat.u
 - ROI-vs-profit chart and weapon market detail cards.
 - Instant-win candidates computed from raw actionable auctions when a listing is materially below same-signature peers or the usable weapon-market floor.
 - MCP tools for live snapshots, riven opportunities, arcane valuation, expanded product surfaces, refreshes, health checks, signature valuation, and planner slices.
+- Built-in AI chat that queries OpenRouter's free `nvidia/nemotron-3-ultra-550b-a55b:free` model and exposes the same local MCP tools to the model server-side.
 
 ## Requirements
 
@@ -111,6 +112,8 @@ Most settings can be changed in the UI. Environment variables are useful for sta
 | `WFM_DATA_BASE` | project data root | Remote valuation/velocity data root. Set `off` to disable. |
 | `WFM_REMOTE_POLL_MS` | `5000` | Remote cold-state polling interval; service enforces a minimum of 5000 ms. |
 | `WFM_RUN_NOW_POLL_MS` | `5000` | Remote Run Now artifact polling interval; service enforces a minimum of 5000 ms. |
+| `OPENROUTER_API_KEY` | public free-only key | OpenRouter key used by `/api/chat`. The checked-in default key is intentionally public and restricted to free-model access. |
+| `OPENROUTER_MODEL` | `nvidia/nemotron-3-ultra-550b-a55b:free` | OpenRouter chat model for the dashboard AI chat. |
 
 Example:
 
@@ -153,6 +156,21 @@ Available MCP tools include:
 - `product_advanced_analytics`
 - `product_planner`
 
+
+## AI chat and public OpenRouter key
+
+The dashboard includes an **AI Chat** page. Browser chat requests post to `POST /api/chat`; the server calls OpenRouter and advertises the app's existing MCP tools as OpenAI/OpenRouter tool definitions. Tool calls returned by the model are executed against the same local ThePlatExchange service, so the model can inspect live riven, arcane, product, Run Now, health, and planner data before answering.
+
+The repository intentionally includes this default OpenRouter key:
+
+```text
+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
+```
+
+This is deliberate for the current public build: the key is restricted to OpenRouter free-model access and has a `$0` limit. It exists only to route local dashboard chat requests to free models without requiring first-run secret setup. Operators can still override it with `OPENROUTER_API_KEY` if they want to use their own key.
+
+The default model is `nvidia/nemotron-3-ultra-550b-a55b:free`.
+
 ## HTTP endpoints
 
 Useful local endpoints:
@@ -171,6 +189,7 @@ Useful local endpoints:
 | `POST /api/refresh` | Trigger a manual refresh. |
 | `POST /api/mode` | Switch `remote`, `tiered`, or `full` mode. |
 | `GET /api/mcp-info` | MCP endpoint and tool metadata. |
+| `POST /api/chat` | Server-side OpenRouter chat stream with local MCP tool-calling. |
 
 ## GitHub Actions data feed
 

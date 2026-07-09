@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { extname, join, normalize, resolve } from "node:path";
 import { McpSseServer } from "./mcp.js";
+import { handleOpenRouterChat } from "./chat.js";
 import { enrichOpportunity, type SignatureLookupHit } from "./mcp/schemas.js";
 import { attributeSignature } from "./wfm/opportunities.js";
 import { buildRunNowLiveArtifact, enforceRunNowWindow, fetchLiveActivitySnapshot, isRunNowArtifactUsable, isRunNowLiveArtifact, overlayRunNowArtifact, type RunNowLiveArtifact } from "./wfm/live.js";
@@ -253,6 +254,12 @@ export function createAppServer(service: ThePlatExchangeService, options: AppSer
       }
       if (request.method === "POST" && url.pathname === "/mcp/messages") {
         await mcp.handleMessage(request, response, url);
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/chat") {
+        const payload = await readRequestJson(request);
+        const origin = typeof request.headers.origin === "string" ? request.headers.origin : `http://${request.headers.host ?? "127.0.0.1"}`;
+        await handleOpenRouterChat(response, mcp, payload, origin);
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/state") {

@@ -83,6 +83,7 @@
       <aside id="leftRail" class="left-rail" aria-label="Primary navigation">
         <nav class="rail-nav">
           <button class="rail-item active" data-page="home" type="button"><span class="rail-icon">⌂</span><span class="rail-label">Home</span></button>
+          <button class="rail-item" data-page="chat" type="button"><span class="rail-icon">✧</span><span class="rail-label">AI Chat</span></button>
           <button class="rail-item" data-page="opportunities" type="button"><span class="rail-icon">◎</span><span class="rail-label">Opportunities</span></button>
           <button class="rail-item" data-page="instant" type="button"><span class="rail-icon">ϟ</span><span class="rail-label">Instant Wins</span></button>
           <button class="rail-item" data-page="arcanes" type="button"><span class="rail-icon">✦</span><span class="rail-label">Arcanes</span></button>
@@ -157,6 +158,40 @@
             <section class="panel instant-preview-panel">
               <div class="section-head"><h2>Instant wins</h2><button class="link-button" data-page="instant" type="button">Open feed ›</button></div>
               <div id="instantPreview" class="instant-preview"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="page" data-page-panel="chat" aria-labelledby="chatTitle">
+          <div class="page-inner chat-page">
+            <div class="page-heading chat-heading">
+              <div>
+                <div class="eyebrow">Site assistant</div>
+                <h1 id="chatTitle">AI Chat</h1>
+                <p>Ask for actionable plat-making guidance. The assistant can inspect current site data and link you directly to the page that matters.</p>
+              </div>
+              <div id="chatStatus" class="chat-status">Ready</div>
+            </div>
+            <section class="panel chat-shell" aria-label="AI chat">
+              <div id="chatMessages" class="chat-messages" aria-live="polite">
+                <article class="chat-message assistant">
+                  <div class="chat-avatar">◆</div>
+                  <div class="chat-bubble">
+                    <strong>Ask for plat-making advice.</strong>
+                    <p>I can check live rivens, instant wins, arcanes, relics, Run Now activities, and data health before answering.</p>
+                  </div>
+                </article>
+              </div>
+              <form id="chatForm" class="chat-form">
+                <label class="chat-input-wrap">
+                  <span class="sr-only">Message</span>
+                  <textarea id="chatInput" rows="3" placeholder="Ask: What should I do right now to make the most plat?" autocomplete="off" spellcheck="true"></textarea>
+                </label>
+                <div class="chat-form-actions">
+                  <span class="chat-hint">Enter to send · Shift Enter for newline</span>
+                  <button id="chatSubmit" class="primary-button" type="submit">Send</button>
+                </div>
+              </form>
             </section>
           </div>
         </section>

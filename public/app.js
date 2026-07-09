@@ -125,6 +125,11 @@ const elements = {
   spotlightResults: document.getElementById("spotlightResults"),
   spotlightOverlay: document.getElementById("spotlightOverlay"),
   spotlightTrigger: document.getElementById("spotlightTrigger"),
+  chatMessages: document.getElementById("chatMessages"),
+  chatForm: document.getElementById("chatForm"),
+  chatInput: document.getElementById("chatInput"),
+  chatSubmit: document.getElementById("chatSubmit"),
+  chatStatus: document.getElementById("chatStatus"),
   weaponModal: document.getElementById("weaponModal"),
   wdContent: document.getElementById("wdContent"),
   marketsPager: document.getElementById("marketsPager"),
@@ -179,6 +184,9 @@ let pendingChartPointer = null;
 let chartPointerFrame = 0;
 let chartResizeFrame = 0;
 let currentProductView = "engines";
+let chatHistory = [];
+let chatActivityCycle = -1;
+let chatStreaming = false;
 let opportunityViewCache = {
   source: null,
   filter: null,
@@ -187,6 +195,30 @@ let opportunityViewCache = {
   filtered: [],
   sorted: [],
 };
+
+const CHAT_WELCOME_HTML = elements.chatMessages?.innerHTML ?? "";
+const CHAT_ACTIVITY_MESSAGES = Object.freeze([
+  "Checking site data…",
+  "Searching the site…",
+  "Reviewing live prices…",
+  "Comparing current listings…",
+  "Checking market health…",
+  "Looking through current scans…",
+  "Reading the latest opportunities…",
+]);
+const CHAT_INTERNAL_PAGES = Object.freeze({
+  home: "Home",
+  chat: "AI Chat",
+  opportunities: "Opportunities",
+  instant: "Instant Wins",
+  arcanes: "Arcanes",
+  products: "Plat Engine",
+  "run-now": "Run Now",
+  "data-health": "Data Health",
+  planner: "Planner",
+  markets: "Riven Markets",
+  settings: "Settings",
+});
 
 
 const SIGNAL_PRIORITY = [
@@ -354,6 +386,32 @@ for (const button of elements.pageButtons) {
   });
 }
 if (elements.pageRoot) elements.pageRoot.addEventListener("scroll", handlePageRootScroll, { passive: true });
+if (elements.chatForm) {
+  elements.chatForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void submitChatMessage();
+  });
+}
+if (elements.chatInput) {
+  elements.chatInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void submitChatMessage();
+    }
+  });
+}
+if (elements.chatMessages) {
+  elements.chatMessages.addEventListener("click", (event) => {
+    const target = event.target instanceof HTMLElement ? event.target.closest("[data-chat-page]") : null;
+    if (!target) return;
+    event.preventDefault();
+    const page = target.dataset.chatPage;
+    if (!page || !CHAT_INTERNAL_PAGES[page]) return;
+    navigate(page, { settingsTab: target.dataset.chatSettingsTab });
+  });
+}
+
+
 
 for (const button of elements.arcaneStrategyButtons) {
   button.addEventListener("click", () => {
@@ -506,6 +564,345 @@ async function requestJson(path, method, body) {
 
 async function postJson(path, body) {
   return requestJson(path, "POST", body);
+}
+
+async function submitChatMessage() {
+  if (!elements.chatInput || chatStreaming) return;
+  const content = elements.chatInput.value.trim();
+  if (!content) return;
+  elements.chatInput.value = "";
+  chatActivityCycle = Math.floor(Math.random() * CHAT_ACTIVITY_MESSAGES.length);
+  chatHistory.push({ role: "user", content });
+  chatHistory.push({ role: "assistant", content: "", pending: true, activity: nextChatActivityMessage() });
+  renderChatMessages();
+  setChatStreaming(true, "Thinking…");
+  const outbound = chatHistory
+    .filter((message) => !message.pending)
+    .map((message) => ({ role: message.role, content: message.content }));
+  try {
+    const response = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: outbound }),
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error ?? `chat ${response.status}`);
+    }
+    if (!response.body) throw new Error("chat stream unavailable");
+    await readChatStream(response.body);
+  } catch (error) {
+    const assistant = currentAssistantMessage();
+    if (assistant) {
+      assistant.activity = "";
+      assistant.content += `${assistant.content ? "\n\n" : ""}Error: ${error.message}`;
+      updateCurrentAssistantBubble();
+    }
+    setChatStatus(`Failed: ${error.message}`);
+  } finally {
+    const assistant = currentAssistantMessage();
+    if (assistant) {
+      assistant.pending = false;
+      assistant.activity = "";
+    }
+    renderChatMessages();
+    setChatStreaming(false, elements.chatStatus?.textContent?.startsWith("Failed:") ? elements.chatStatus.textContent : "Ready");
+  }
+}
+
+async function readChatStream(body) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parsed = drainChatStreamBuffer(buffer);
+    buffer = parsed.remaining;
+    for (const block of parsed.blocks) handleChatEventBlock(block);
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) handleChatEventBlock(buffer);
+}
+
+function drainChatStreamBuffer(buffer) {
+  const blocks = [];
+  let remaining = buffer;
+  for (;;) {
+    const match = /\r?\n\r?\n/.exec(remaining);
+    if (!match || match.index === undefined) break;
+    blocks.push(remaining.slice(0, match.index));
+    remaining = remaining.slice(match.index + match[0].length);
+  }
+  return { blocks, remaining };
+}
+
+function handleChatEventBlock(block) {
+  const lines = block.split(/\r?\n/);
+  let event = "message";
+  const dataLines = [];
+  for (const line of lines) {
+    if (line.startsWith("event:")) event = line.slice(6).trim();
+    else if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+  }
+  if (dataLines.length === 0) return;
+  const payload = JSON.parse(dataLines.join("\n"));
+  if (event === "delta") {
+    const assistant = currentAssistantMessage();
+    if (assistant) {
+      assistant.activity = "";
+      assistant.content += String(payload.content ?? "");
+      updateCurrentAssistantBubble();
+    }
+    setChatStatus("Answering…");
+    return;
+  }
+  if (event === "status") {
+    setAssistantActivity(payload.phase === "answering" ? "Composing answer…" : nextChatActivityMessage());
+    setChatStatus(payload.phase === "answering" ? "Answering…" : "Thinking…");
+    return;
+  }
+  if (event === "lookup_start") {
+    setAssistantActivity(nextChatActivityMessage());
+    setChatStatus("Checking…");
+    return;
+  }
+  if (event === "lookup_result") {
+    setAssistantActivity(nextChatActivityMessage());
+    setChatStatus(payload.ok ? "Checking…" : "Checking hit a snag");
+    return;
+  }
+  if (event === "usage") {
+    setChatStatus("Answering…");
+    return;
+  }
+  if (event === "error") {
+    const assistant = currentAssistantMessage();
+    if (assistant) {
+      assistant.activity = "";
+      assistant.content += `${assistant.content ? "\n\n" : ""}Error: ${payload.error ?? "chat failed"}`;
+      updateCurrentAssistantBubble();
+    }
+    setChatStatus(`Failed: ${payload.error ?? "chat failed"}`);
+    return;
+  }
+  if (event === "done") setChatStatus("Ready");
+}
+
+function nextChatActivityMessage() {
+  chatActivityCycle = (chatActivityCycle + 1 + Math.floor(Math.random() * Math.max(1, CHAT_ACTIVITY_MESSAGES.length - 1))) % CHAT_ACTIVITY_MESSAGES.length;
+  return CHAT_ACTIVITY_MESSAGES[chatActivityCycle] ?? "Checking site data…";
+}
+
+function setAssistantActivity(text) {
+  const assistant = currentAssistantMessage();
+  if (!assistant) return;
+  assistant.activity = text;
+  updateCurrentAssistantBubble();
+}
+
+function currentAssistantMessage() {
+  for (let index = chatHistory.length - 1; index >= 0; index -= 1) {
+    const message = chatHistory[index];
+    if (message?.role === "assistant") return message;
+  }
+  return null;
+}
+
+function renderChatMessages() {
+  if (!elements.chatMessages) return;
+  if (chatHistory.length === 0) {
+    elements.chatMessages.innerHTML = CHAT_WELCOME_HTML;
+    return;
+  }
+  elements.chatMessages.innerHTML = chatHistory.map((message, index) => `
+    <article class="chat-message ${message.role}${message.pending ? " pending" : ""}" data-chat-index="${index}">
+      <div class="chat-avatar">${message.role === "user" ? "You" : "◆"}</div>
+      ${chatBubbleHtml(message)}
+    </article>
+  `).join("");
+  scrollChatToBottom();
+}
+
+function chatBubbleHtml(message) {
+  const activity = message.activity ? `<div class="chat-inline-status"><span aria-hidden="true">⌕</span>${escapeHtml(message.activity)}</div>` : "";
+  const content = message.content || (message.pending ? "" : "");
+  const empty = !content && message.pending ? `<span class="chat-thinking-dot">…</span>` : "";
+  return `<div class="chat-bubble">${activity}<div class="chat-content">${empty || formatChatText(content)}</div></div>`;
+}
+
+function updateCurrentAssistantBubble() {
+  if (!elements.chatMessages) return;
+  const assistant = currentAssistantMessage();
+  if (!assistant) return;
+  const index = chatHistory.lastIndexOf(assistant);
+  const article = elements.chatMessages.querySelector(`[data-chat-index="${index}"]`);
+  if (!article) {
+    renderChatMessages();
+    return;
+  }
+  const existingBubble = article.querySelector(".chat-bubble");
+  if (existingBubble) existingBubble.outerHTML = chatBubbleHtml(assistant);
+  if (!prefersReducedMotion()) {
+    const nextBubble = article.querySelector(".chat-bubble");
+    nextBubble?.animate([
+      { opacity: 0.82, transform: "translateY(1px)" },
+      { opacity: 1, transform: "translateY(0)" },
+    ], { duration: 140, easing: "cubic-bezier(.16, 1, .3, 1)" });
+  }
+  scrollChatToBottom();
+}
+
+function scrollChatToBottom() {
+  if (!elements.chatMessages) return;
+  elements.chatMessages.scrollTo({ top: elements.chatMessages.scrollHeight, behavior: prefersReducedMotion() ? "auto" : "smooth" });
+}
+
+function formatChatText(value) {
+  const lines = String(value ?? "").split(/\r?\n/);
+  const html = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index] ?? "";
+    if (line.trim() === "") {
+      index += 1;
+      continue;
+    }
+    if (line.trim().startsWith("```")) {
+      const code = [];
+      index += 1;
+      while (index < lines.length && !(lines[index] ?? "").trim().startsWith("```")) {
+        code.push(lines[index] ?? "");
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      html.push(`<pre><code>${escapeHtml(code.join("\n"))}</code></pre>`);
+      continue;
+    }
+    const heading = /^(#{1,3})\s+(.+)$/.exec(line);
+    if (heading) {
+      const level = Math.min(3, heading[1].length + 2);
+      html.push(`<h${level}>${formatInlineMarkdown(heading[2])}</h${level}>`);
+      index += 1;
+      continue;
+    }
+    if (isMarkdownTableStart(lines, index)) {
+      const table = formatMarkdownTable(lines, index);
+      html.push(table.html);
+      index = table.nextIndex;
+      continue;
+    }
+    if (/^\s*[-*]\s+/.test(line)) {
+      const items = [];
+      while (index < lines.length && /^\s*[-*]\s+/.test(lines[index] ?? "")) {
+        items.push(`<li>${formatInlineMarkdown((lines[index] ?? "").replace(/^\s*[-*]\s+/, ""))}</li>`);
+        index += 1;
+      }
+      html.push(`<ul>${items.join("")}</ul>`);
+      continue;
+    }
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const items = [];
+      while (index < lines.length && /^\s*\d+\.\s+/.test(lines[index] ?? "")) {
+        items.push(`<li>${formatInlineMarkdown((lines[index] ?? "").replace(/^\s*\d+\.\s+/, ""))}</li>`);
+        index += 1;
+      }
+      html.push(`<ol>${items.join("")}</ol>`);
+      continue;
+    }
+    const paragraph = [];
+    while (index < lines.length && lines[index]?.trim() && !isMarkdownBlockStart(lines, index)) {
+      paragraph.push(lines[index] ?? "");
+      index += 1;
+    }
+    html.push(`<p>${formatInlineMarkdown(paragraph.join(" "))}</p>`);
+  }
+  return html.join("");
+}
+
+function isMarkdownBlockStart(lines, index) {
+  const line = lines[index] ?? "";
+  return line.trim().startsWith("```")
+    || /^(#{1,3})\s+/.test(line)
+    || isMarkdownTableStart(lines, index)
+    || /^\s*[-*]\s+/.test(line)
+    || /^\s*\d+\.\s+/.test(line);
+}
+
+function isMarkdownTableStart(lines, index) {
+  const current = lines[index] ?? "";
+  const next = lines[index + 1] ?? "";
+  return current.includes("|") && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(next);
+}
+
+function formatMarkdownTable(lines, startIndex) {
+  const headers = splitMarkdownTableRow(lines[startIndex] ?? "");
+  const rows = [];
+  let index = startIndex + 2;
+  while (index < lines.length && (lines[index] ?? "").includes("|") && (lines[index] ?? "").trim() !== "") {
+    rows.push(splitMarkdownTableRow(lines[index] ?? ""));
+    index += 1;
+  }
+  const headHtml = headers.map((cell) => `<th>${formatInlineMarkdown(cell)}</th>`).join("");
+  const bodyHtml = rows.map((row) => `<tr>${headers.map((_, cellIndex) => `<td>${formatInlineMarkdown(row[cellIndex] ?? "")}</td>`).join("")}</tr>`).join("");
+  return { html: `<div class="chat-table-wrap"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div>`, nextIndex: index };
+}
+
+function splitMarkdownTableRow(row) {
+  return row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+}
+
+function formatInlineMarkdown(value) {
+  const raw = String(value ?? "");
+  const tokenPattern = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\))/g;
+  let html = "";
+  let lastIndex = 0;
+  for (const match of raw.matchAll(tokenPattern)) {
+    html += escapeHtml(raw.slice(lastIndex, match.index));
+    const token = match[0];
+    if (token.startsWith("`")) html += `<code>${escapeHtml(token.slice(1, -1))}</code>`;
+    else if (token.startsWith("**")) html += `<strong>${escapeHtml(token.slice(2, -2))}</strong>`;
+    else {
+      const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(token);
+      html += link ? chatLinkHtml(link[1], link[2]) : escapeHtml(token);
+    }
+    lastIndex = (match.index ?? 0) + token.length;
+  }
+  html += escapeHtml(raw.slice(lastIndex));
+  return html;
+}
+
+function chatLinkHtml(label, href) {
+  const page = parseChatPageHref(href);
+  if (page) {
+    const tab = page.settingsTab ? ` data-chat-settings-tab="${escapeHtml(page.settingsTab)}"` : "";
+    return `<a class="chat-link" href="${escapeHtml(href)}" data-chat-page="${escapeHtml(page.page)}"${tab}>${escapeHtml(label)}<span aria-hidden="true">↗</span></a>`;
+  }
+  if (/^https:\/\/(warframe\.market|www\.warframe\.com|github\.com)\//i.test(href)) {
+    return `<a class="chat-link external" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}<span aria-hidden="true">↗</span></a>`;
+  }
+  return escapeHtml(label);
+}
+
+function parseChatPageHref(href) {
+  if (!href.startsWith("#page=")) return null;
+  const params = new URLSearchParams(href.slice(1));
+  const page = params.get("page") ?? "";
+  if (!CHAT_INTERNAL_PAGES[page]) return null;
+  const settingsTab = page === "settings" ? params.get("tab") || undefined : undefined;
+  return { page, settingsTab };
+}
+
+function setChatStreaming(streaming, status) {
+  chatStreaming = streaming;
+  if (elements.chatSubmit) elements.chatSubmit.disabled = streaming;
+  if (elements.chatInput) elements.chatInput.disabled = streaming;
+  setChatStatus(status);
+}
+
+function setChatStatus(status) {
+  if (elements.chatStatus) elements.chatStatus.textContent = status;
 }
 
 function render(state) {
@@ -2247,6 +2644,7 @@ async function updateSpotlight(raw) {
   if (parsed.filter) items.push({ type: "filter", text: parsed.text, filter: parsed.filter });
   for (const page of [
     { name: "Home", sub: "Market command center", page: "home" },
+    { name: "AI Chat", sub: "Ask the site assistant with current market context", page: "chat" },
     { name: "Opportunities", sub: "Ranked buy-low / sell-high queue", page: "opportunities" },
     { name: "Instant Wins", sub: "Same-signature undervalued listings", page: "instant" },
     { name: "Arcanes", sub: "Raw Plat Output and dissolve recommendations", page: "arcanes" },
@@ -2412,17 +2810,19 @@ function renderSpotlightHints() {
   const results = elements.spotlightResults;
   if (!results) return;
   spotlightItems = [
-    { type: "page", name: "Opportunities", sub: "", page: "opportunities", __index: 0 },
-    { type: "page", name: "Instant Wins", sub: "", page: "instant", __index: 1 },
-    { type: "page", name: "Arcanes", sub: "", page: "arcanes", __index: 2 },
+    { type: "page", name: "AI Chat", sub: "", page: "chat", __index: 0 },
+    { type: "page", name: "Opportunities", sub: "", page: "opportunities", __index: 1 },
+    { type: "page", name: "Instant Wins", sub: "", page: "instant", __index: 2 },
+    { type: "page", name: "Arcanes", sub: "", page: "arcanes", __index: 3 },
   ];
   spotlightIndex = -1;
   results.removeAttribute("hidden");
   results.innerHTML = `
     <div class="spotlight-section-label">Try this</div>
-    <button class="spotlight-item" data-index="0" type="button"><span class="spotlight-glyph">◎</span><div class="spotlight-body"><div class="spotlight-title">Opportunities</div></div><span class="spotlight-arrow">›</span></button>
-    <button class="spotlight-item" data-index="1" type="button"><span class="spotlight-glyph">ϟ</span><div class="spotlight-body"><div class="spotlight-title">Instant Wins</div></div><span class="spotlight-arrow">›</span></button>
-    <button class="spotlight-item" data-index="2" type="button"><span class="spotlight-glyph">✦</span><div class="spotlight-body"><div class="spotlight-title">Arcanes</div></div><span class="spotlight-arrow">›</span></button>
+    <button class="spotlight-item" data-index="0" type="button"><span class="spotlight-glyph">✧</span><div class="spotlight-body"><div class="spotlight-title">AI Chat</div></div><span class="spotlight-arrow">›</span></button>
+    <button class="spotlight-item" data-index="1" type="button"><span class="spotlight-glyph">◎</span><div class="spotlight-body"><div class="spotlight-title">Opportunities</div></div><span class="spotlight-arrow">›</span></button>
+    <button class="spotlight-item" data-index="2" type="button"><span class="spotlight-glyph">ϟ</span><div class="spotlight-body"><div class="spotlight-title">Instant Wins</div></div><span class="spotlight-arrow">›</span></button>
+    <button class="spotlight-item" data-index="3" type="button"><span class="spotlight-glyph">✦</span><div class="spotlight-body"><div class="spotlight-title">Arcanes</div></div><span class="spotlight-arrow">›</span></button>
     <div class="spotlight-item spotlight-hint"><span class="spotlight-glyph">⌕</span><div class="spotlight-body"><div class="spotlight-title">Search items, weapons, filters...</div></div></div>`;
   for (const button of results.querySelectorAll(".spotlight-item:not(.spotlight-hint)")) button.addEventListener("click", () => activateSpotlightItem(Number(button.dataset.index)));
 }
