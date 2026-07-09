@@ -108,6 +108,7 @@ assert.equal(exact.conservativeSellPrice, 180);
 assert.equal(exact.expectedProfit, 130);
 assert.equal(exact.buyToSellRatio, 4.4);
 assert.equal(exact.status, "ingame");
+assert.equal(exact.url, "https://warframe.market/auction/exact-cheap");
 
 const unique = analysis.opportunities.find((entry) => entry.auctionId === "unique-cheap");
 assert(unique, "fallback opportunity missing");

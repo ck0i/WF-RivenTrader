@@ -241,8 +241,12 @@ function makeOpportunity(
     negatives,
     reasons,
     updated: auction.updated || auction.created,
-    url: `https://warframe.market/auctions/search?type=riven&weapon_url_name=${encodeURIComponent(weapon.slug)}&sort_by=price_asc`,
+    url: rivenAuctionUrl(auction.id),
   };
+}
+
+function rivenAuctionUrl(auctionId: string): string {
+  return `https://warframe.market/auction/${encodeURIComponent(auctionId)}`;
 }
 
 function estimateAuctionValue(

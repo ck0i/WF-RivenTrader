@@ -829,7 +829,7 @@ if (elements.tickerItems) {
     const button = event.target instanceof HTMLElement ? event.target.closest("[data-ticker-index]") : null;
     if (!button || !elements.tickerItems.contains(button)) return;
     const opportunity = tickerItems[Number(button.dataset.tickerIndex)];
-    if (opportunity?.weaponSlug) openWeaponDetail(opportunity.weaponSlug);
+    openOpportunityListing(opportunity);
   });
 }
 
@@ -858,7 +858,7 @@ function renderHero(opportunity) {
 
 if (elements.heroOpen) {
   elements.heroOpen.addEventListener("click", () => {
-    if (heroOpportunity?.url) window.open(heroOpportunity.url, "_blank", "noopener");
+    openOpportunityListing(heroOpportunity);
   });
 }
 
@@ -1086,7 +1086,7 @@ function createOpportunityCard(opportunity, index, key = opportunityKey(opportun
   card.innerHTML = `
     <button class="opp-row" type="button" data-action="toggle" title="${escapeHtml(sellerName)} · ${escapeHtml(opportunity.status)} · ${opportunity.comparableListings} comparables · score ${Math.round(opportunity.score ?? 0)}">
       <span class="opp-rank">${String(index + 1).padStart(2, "0")}</span>
-      <span class="opp-main" data-action="weapon" data-weapon-slug="${escapeHtml(opportunity.weaponSlug)}">
+      <span class="opp-main" data-action="open">
         ${weaponThumb(opportunity.imageName, opportunity.weaponName, "sm")}
         <span class="opp-title">
           <strong>${escapeHtml(opportunity.weaponName)}</strong>
@@ -1133,7 +1133,7 @@ function handleOpportunityClick(event, opportunity) {
   if (action === "open") {
     event.preventDefault();
     event.stopPropagation();
-    if (opportunity.url) window.open(opportunity.url, "_blank", "noopener");
+    openOpportunityListing(opportunity);
     return;
   }
   if (action === "copy") {
@@ -1190,7 +1190,7 @@ function renderFreshOpportunities(opportunities) {
       <span><strong>${escapeHtml(opportunity.weaponName)}</strong><small>${escapeHtml(opportunity.rivenName)}</small></span>
       <span class="fresh-value"><strong>+${opportunity.expectedProfit}◈</strong><small>${Math.round((opportunity.roi ?? 0) * 100)}% ROI</small></span>
     `;
-    button.addEventListener("click", () => openWeaponDetail(opportunity.weaponSlug));
+    button.addEventListener("click", () => openOpportunityListing(opportunity));
     elements.freshOpps.appendChild(button);
   }
 }
@@ -1228,7 +1228,7 @@ function renderTopSpreadCards(opportunities) {
     const target = opportunity.conservativeSellPrice == null ? opportunity.targetSellPrice : opportunity.conservativeSellPrice;
     const targetText = target == null ? "?" : `${target}◈`;
     return `
-      <button class="top-spread-card" type="button" data-url="${escapeHtml(opportunity.url ?? "")}" data-weapon-slug="${escapeHtml(opportunity.weaponSlug ?? "")}">
+      <button class="top-spread-card" type="button" data-url="${escapeHtml(opportunityListingUrl(opportunity))}" data-weapon-slug="${escapeHtml(opportunity.weaponSlug ?? "")}">
         <strong>${escapeHtml(opportunity.weaponName)}</strong>
         <span>${escapeHtml(opportunity.rivenName)}</span>
         <small class="top-spread-meta">#${index + 1} · ${escapeHtml(buy)} → ${escapeHtml(targetText)} · ${escapeHtml(tier)}-tier · ${Math.round((opportunity.roi ?? 0) * 100)}% ROI</small>
@@ -1280,7 +1280,7 @@ function renderInstantWins(items) {
     card.addEventListener("click", (event) => {
       const action = event.target instanceof HTMLElement ? event.target.closest("[data-action]")?.dataset.action : null;
       if (!action) return;
-      if (action === "open" && opportunity.url) window.open(opportunity.url, "_blank", "noopener");
+      if (action === "open") openOpportunityListing(opportunity);
       if (action === "copy") {
         copiedOpportunityKey = key;
         void copyText(tradeWhisper(opportunity), event.target.closest("button")).then(() => {
@@ -2193,7 +2193,7 @@ if (elements.chart) {
   elements.chart.addEventListener("click", (event) => {
     const { mx, my } = canvasPointFromEvent(event);
     const hit = findScatterHit(mx, my, 6);
-    if (hit?.opportunity?.url) window.open(hit.opportunity.url, "_blank", "noopener");
+    openOpportunityListing(hit?.opportunity);
   });
 }
 
@@ -2530,7 +2530,7 @@ function renderWeaponDetail(detail) {
   const opportunitiesHtml = (opportunities ?? []).length > 0
     ? opportunities.slice(0, RESULT_BUDGETS.weaponDetailOpportunities).map((opp) => {
         const tier = opp.quality?.tier ?? tierFromScore(opp.score);
-        return `<div class="wd-opp" data-url="${escapeHtml(opp.url)}">
+        return `<div class="wd-opp" data-url="${escapeHtml(opportunityListingUrl(opp))}">
           <div class="wd-opp-price"><span class="price">${opp.buyPrice}◈</span> → ${opp.conservativeSellPrice ?? opp.targetSellPrice}◈ <span class="profit">+${opp.expectedProfit}◈</span></div>
           <div class="wd-opp-meta small">${escapeHtml(opp.rivenName)} · ${escapeHtml(opp.seller?.ingameName ?? "seller")} · ${escapeHtml(opp.status)} · comps ${opp.comparableListings}</div>
           <div class="wd-opp-flags">${(opp.positives ?? []).slice(0, 4).map((p) => `<span class="flag good">+${escapeHtml(p)}</span>`).join("")}${(opp.negatives ?? []).slice(0, 2).map((n) => `<span class="flag bad">-${escapeHtml(n)}</span>`).join("")}<span class="tier-badge tier-${tier}">${tier}</span></div>
@@ -2954,6 +2954,20 @@ function tierFromScore(score) {
   if (value >= 70) return "B";
   if (value >= 50) return "C";
   return "D";
+}
+
+function opportunityListingUrl(opportunity) {
+  if (opportunity?.auctionId) return `https://warframe.market/auction/${encodeURIComponent(opportunity.auctionId)}`;
+  return opportunity?.url ?? "";
+}
+
+function openOpportunityListing(opportunity) {
+  const url = opportunityListingUrl(opportunity);
+  if (url) {
+    window.open(url, "_blank", "noopener");
+    return;
+  }
+  if (opportunity?.weaponSlug) openWeaponDetail(opportunity.weaponSlug);
 }
 
 function opportunityKey(opportunity) {
