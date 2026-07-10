@@ -170,12 +170,18 @@
                 <h1 id="chatTitle">AI Chat</h1>
                 <p>Ask for actionable plat-making guidance. The assistant can inspect current site data and link you directly to the page that matters.</p>
               </div>
-              <div id="chatStatus" class="chat-status">Ready</div>
+              <div class="chat-heading-actions">
+                <button id="chatExport" class="ghost-button chat-export" type="button" disabled title="Download this conversation as a Markdown file" aria-label="Export chat as Markdown">
+                  <span class="chat-export-glyph" aria-hidden="true">⇩</span>
+                  <span>Export</span>
+                </button>
+                <div id="chatStatus" class="chat-status">Ready</div>
+              </div>
             </div>
             <section class="panel chat-shell" aria-label="AI chat">
               <div id="chatMessages" class="chat-messages" aria-live="polite">
                 <article class="chat-message assistant">
-                  <div class="chat-avatar">◆</div>
+                  <div class="chat-avatar chat-avatar-assistant" aria-hidden="true"></div>
                   <div class="chat-bubble">
                     <strong>Ask for plat-making advice.</strong>
                     <p>I can check live rivens, instant wins, arcanes, relics, Run Now activities, and data health before answering.</p>
@@ -405,6 +411,7 @@
             <div class="page-heading"><div><h1 id="settingsTitle">Settings</h1></div></div>
             <div class="settings-tabs">
               <button class="settings-tab active" data-settings-tab="data" type="button">Data Source</button>
+              <button class="settings-tab" data-settings-tab="appearance" type="button">Appearance</button>
               <button class="settings-tab" data-settings-tab="mcp" type="button">MCP Connect</button>
               <button class="settings-tab" data-settings-tab="about" type="button">About</button>
             </div>
@@ -418,6 +425,30 @@
               </div>
               <div id="modeHint" class="mode-hint">Select a data source.</div>
               <div class="settings-status" id="dataStatusLine"></div>
+            </div>
+
+            <div class="settings-panel" data-settings-panel="appearance" hidden>
+              <p class="muted-copy">Choose the portraits used in the AI Chat.</p>
+              <section class="avatar-picker" aria-labelledby="cephalonPickerLabel">
+                <div class="avatar-picker-head">
+                  <h3 id="cephalonPickerLabel">Assistant · Cephalon</h3>
+                  <span id="cephalonPickerCurrent" class="avatar-picker-current">Cephalon Simaris</span>
+                </div>
+                <div id="cephalonPicker" class="avatar-grid" role="radiogroup" aria-labelledby="cephalonPickerLabel"></div>
+              </section>
+              <section class="avatar-picker" aria-labelledby="framePickerLabel">
+                <div class="avatar-picker-head">
+                  <h3 id="framePickerLabel">You · Warframe</h3>
+                  <span id="framePickerCurrent" class="avatar-picker-current">Excalibur</span>
+                </div>
+                <div class="avatar-frame-picker">
+                  <div class="avatar-frame-preview" aria-hidden="true"><img id="framePickerPreview" src="" alt=""></div>
+                  <label class="avatar-frame-select">
+                    <span class="sr-only">Pick a Warframe</span>
+                    <select id="framePickerSelect"></select>
+                  </label>
+                </div>
+              </section>
             </div>
 
             <div class="settings-panel" data-settings-panel="mcp" hidden>

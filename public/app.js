@@ -1,3 +1,4 @@
+window.__topMark = 1;
 const elements = {
   topBar: document.getElementById("topBar"),
   leftRail: document.getElementById("leftRail"),
@@ -99,6 +100,11 @@ const elements = {
   settingsButton: document.getElementById("settingsButton"),
   settingsTabs: document.querySelectorAll(".settings-tab"),
   settingsPanels: document.querySelectorAll(".settings-panel"),
+  cephalonPicker: document.getElementById("cephalonPicker"),
+  cephalonPickerCurrent: document.getElementById("cephalonPickerCurrent"),
+  framePickerSelect: document.getElementById("framePickerSelect"),
+  framePickerPreview: document.getElementById("framePickerPreview"),
+  framePickerCurrent: document.getElementById("framePickerCurrent"),
   mcpEndpoint: document.getElementById("mcpEndpoint"),
   mcpMessageEndpoint: document.getElementById("mcpMessageEndpoint"),
   mcpServerName: document.getElementById("mcpServerName"),
@@ -130,6 +136,7 @@ const elements = {
   chatInput: document.getElementById("chatInput"),
   chatSubmit: document.getElementById("chatSubmit"),
   chatStatus: document.getElementById("chatStatus"),
+  chatExport: document.getElementById("chatExport"),
   weaponModal: document.getElementById("weaponModal"),
   wdContent: document.getElementById("wdContent"),
   marketsPager: document.getElementById("marketsPager"),
@@ -196,7 +203,116 @@ let opportunityViewCache = {
   sorted: [],
 };
 
-const CHAT_WELCOME_HTML = elements.chatMessages?.innerHTML ?? "";
+const AVATAR_CEPHALONS = Object.freeze([
+  { slug: "simaris",   name: "Cephalon Simaris",   src: "/assets/cephalons/simaris.jpg" },
+  { slug: "ordis",     name: "Cephalon Ordis",     src: "/assets/cephalons/ordis.png" },
+  { slug: "suda",      name: "Cephalon Suda",      src: "/assets/cephalons/suda.png" },
+  { slug: "cy",        name: "Cephalon Cy",        src: "/assets/cephalons/cy.png" },
+  { slug: "cordylon",  name: "Cephalon Cordylon",  src: "/assets/cephalons/cordylon.png" },
+  { slug: "samodeus",  name: "Cephalon Samodeus",  src: "/assets/cephalons/samodeus.png" },
+  { slug: "sark",      name: "Cephalon Sark",      src: "/assets/cephalons/sark.jpg" },
+  { slug: "jordas",    name: "Cephalon Jordas",    src: "/assets/cephalons/jordas.png" },
+  { slug: "otak",      name: "Otak",               src: "/assets/cephalons/otak.jpg" },
+]);
+const AVATAR_FRAMES = Object.freeze([
+  { slug: "ash", name: "Ash", src: "/img/Ash.png" },
+  { slug: "atlas", name: "Atlas", src: "/img/Atlas.png" },
+  { slug: "banshee", name: "Banshee", src: "/img/Banshee.png" },
+  { slug: "baruuk", name: "Baruuk", src: "/img/Pacifist.png" },
+  { slug: "caliban", name: "Caliban", src: "/img/Caliban.png" },
+  { slug: "chroma", name: "Chroma", src: "/img/Chroma.png" },
+  { slug: "citrine", name: "Citrine", src: "/img/Citrine.png" },
+  { slug: "cyte-09", name: "Cyte-09", src: "/img/Frumentarius.png" },
+  { slug: "dagath", name: "Dagath", src: "/img/Dagath.png" },
+  { slug: "dante", name: "Dante", src: "/img/Pagemaster.png" },
+  { slug: "ember", name: "Ember", src: "/img/Ember.png" },
+  { slug: "equinox", name: "Equinox", src: "/img/Equinox.png" },
+  { slug: "excalibur", name: "Excalibur", src: "/img/Excalibur.png" },
+  { slug: "frost", name: "Frost", src: "/img/Frost.png" },
+  { slug: "gara", name: "Gara", src: "/img/Gara.png" },
+  { slug: "garuda", name: "Garuda", src: "/img/Garuda.png" },
+  { slug: "gauss", name: "Gauss", src: "/img/Gauss.png" },
+  { slug: "grendel", name: "Grendel", src: "/img/Grendel.png" },
+  { slug: "gyre", name: "Gyre", src: "/img/Gyre.png" },
+  { slug: "harrow", name: "Harrow", src: "/img/Harrow.png" },
+  { slug: "hildryn", name: "Hildryn", src: "/img/IronFrame.png" },
+  { slug: "hydroid", name: "Hydroid", src: "/img/Hydroid.png" },
+  { slug: "inaros", name: "Inaros", src: "/img/Inaros.png" },
+  { slug: "ivara", name: "Ivara", src: "/img/Ivara.png" },
+  { slug: "khora", name: "Khora", src: "/img/Khora.png" },
+  { slug: "koumei", name: "Koumei", src: "/img/Koumei.png" },
+  { slug: "kullervo", name: "Kullervo", src: "/img/PaxDuviricus.png" },
+  { slug: "lavos", name: "Lavos", src: "/img/Lavos.png" },
+  { slug: "limbo", name: "Limbo", src: "/img/Limbo.png" },
+  { slug: "loki", name: "Loki", src: "/img/Loki.png" },
+  { slug: "mag", name: "Mag", src: "/img/Mag.png" },
+  { slug: "mesa", name: "Mesa", src: "/img/Mesa.png" },
+  { slug: "mirage", name: "Mirage", src: "/img/Mirage.png" },
+  { slug: "nekros", name: "Nekros", src: "/img/Nekros.png" },
+  { slug: "nezha", name: "Nezha", src: "/img/Nezha.png" },
+  { slug: "nidus", name: "Nidus", src: "/img/Nidus.png" },
+  { slug: "nova", name: "Nova", src: "/img/Nova.png" },
+  { slug: "nyx", name: "Nyx", src: "/img/Nyx.png" },
+  { slug: "oberon", name: "Oberon", src: "/img/Oberon.png" },
+  { slug: "octavia", name: "Octavia", src: "/img/Octavia.png" },
+  { slug: "oraxia", name: "Oraxia", src: "/img/Oraxia.png" },
+  { slug: "protea", name: "Protea", src: "/img/Odalisk.png" },
+  { slug: "qorvex", name: "Qorvex", src: "/img/Qorvex.png" },
+  { slug: "revenant", name: "Revenant", src: "/img/Revenant.png" },
+  { slug: "rhino", name: "Rhino", src: "/img/Rhino.png" },
+  { slug: "saryn", name: "Saryn", src: "/img/Saryn.png" },
+  { slug: "sevagoth", name: "Sevagoth", src: "/img/Wraith.png" },
+  { slug: "styanax", name: "Styanax", src: "/img/Styanax.png" },
+  { slug: "temple", name: "Temple", src: "/img/Temple.png" },
+  { slug: "titania", name: "Titania", src: "/img/Titania.png" },
+  { slug: "trinity", name: "Trinity", src: "/img/Trinity.png" },
+  { slug: "valkyr", name: "Valkyr", src: "/img/Valkyr.png" },
+  { slug: "vauban", name: "Vauban", src: "/img/Vauban.png" },
+  { slug: "voruna", name: "Voruna", src: "/img/Voruna.png" },
+  { slug: "volt", name: "Volt", src: "/img/Volt.png" },
+  { slug: "wisp", name: "Wisp", src: "/img/Wisp.png" },
+  { slug: "wukong", name: "Wukong", src: "/img/Wukong.png" },
+  { slug: "xaku", name: "Xaku", src: "/img/BrokenFrame.png" },
+  { slug: "yareli", name: "Yareli", src: "/img/Yareli.png" },
+  { slug: "zephyr", name: "Zephyr", src: "/img/Zephyr.png" },
+]);
+const AVATAR_STORAGE = { assistant: "tpe-chat-avatar-assistant", user: "tpe-chat-avatar-user" };
+const AVATAR_DEFAULT = { assistant: "simaris", user: "excalibur" };
+
+function readAvatarSelection(key, catalog, fallback) {
+  try {
+    const stored = window.localStorage?.getItem(key);
+    if (stored && catalog.some((entry) => entry.slug === stored)) return stored;
+  } catch {
+    // localStorage unavailable — fall through
+  }
+  return fallback;
+}
+let assistantAvatarSlug = readAvatarSelection(AVATAR_STORAGE.assistant, AVATAR_CEPHALONS, AVATAR_DEFAULT.assistant);
+let userAvatarSlug = readAvatarSelection(AVATAR_STORAGE.user, AVATAR_FRAMES, AVATAR_DEFAULT.user);
+
+function resolveAvatar(catalog, slug, fallbackSlug) {
+  return catalog.find((entry) => entry.slug === slug) ?? catalog.find((entry) => entry.slug === fallbackSlug) ?? catalog[0];
+}
+function currentAssistantAvatar() { return resolveAvatar(AVATAR_CEPHALONS, assistantAvatarSlug, AVATAR_DEFAULT.assistant); }
+function currentUserAvatar() { return resolveAvatar(AVATAR_FRAMES, userAvatarSlug, AVATAR_DEFAULT.user); }
+function assistantAvatarImgHtml() {
+  const entry = currentAssistantAvatar();
+  return `<img class="chat-avatar-img" src="${escapeHtml(entry.src)}" alt="" loading="lazy" decoding="async">`;
+}
+function userAvatarImgHtml() {
+  const entry = currentUserAvatar();
+  return `<img class="chat-avatar-img" src="${escapeHtml(entry.src)}" alt="" loading="lazy" decoding="async">`;
+}
+function buildChatWelcomeHtml() {
+  return `<article class="chat-message assistant">`
+    + `<div class="chat-avatar chat-avatar-assistant" aria-hidden="true">${assistantAvatarImgHtml()}</div>`
+    + `<div class="chat-bubble">`
+    + `<strong>Ask for plat-making advice.</strong>`
+    + `<p>I can check live rivens, instant wins, arcanes, relics, Run Now activities, and data health before answering.</p>`
+    + `</div>`
+    + `</article>`;
+}
 const CHAT_ACTIVITY_MESSAGES = Object.freeze([
   "Checking site data…",
   "Searching the site…",
@@ -410,6 +526,18 @@ if (elements.chatMessages) {
     navigate(page, { settingsTab: target.dataset.chatSettingsTab });
   });
 }
+window.__hereA = 1;
+if (elements.chatExport) {
+  window.__hereB = 1;
+  elements.chatExport.addEventListener("click", () => {
+    window.__hereClick = (window.__hereClick ?? 0) + 1;
+    exportChatMarkdown();
+  });
+  window.__hereC = 1;
+} else {
+  window.__hereD = 1;
+}
+window.__hereE = 1;
 
 
 
@@ -713,16 +841,62 @@ function currentAssistantMessage() {
 function renderChatMessages() {
   if (!elements.chatMessages) return;
   if (chatHistory.length === 0) {
-    elements.chatMessages.innerHTML = CHAT_WELCOME_HTML;
+    elements.chatMessages.innerHTML = buildChatWelcomeHtml();
+    updateChatExportState();
     return;
   }
   elements.chatMessages.innerHTML = chatHistory.map((message, index) => `
     <article class="chat-message ${message.role}${message.pending ? " pending" : ""}" data-chat-index="${index}">
-      <div class="chat-avatar">${message.role === "user" ? "You" : "◆"}</div>
+      <div class="chat-avatar chat-avatar-${message.role === "user" ? "user" : "assistant"}" aria-hidden="true">${message.role === "user" ? userAvatarImgHtml() : assistantAvatarImgHtml()}</div>
       ${chatBubbleHtml(message)}
     </article>
   `).join("");
+  updateChatExportState();
   scrollChatToBottom();
+}
+
+function hasExportableChatContent() {
+  for (const message of chatHistory) {
+    if (message?.pending) continue;
+    if (message?.role !== "user" && message?.role !== "assistant") continue;
+    if (typeof message.content === "string" && message.content.trim()) return true;
+  }
+  return false;
+}
+
+function updateChatExportState() {
+  if (!elements.chatExport) return;
+  const ready = !chatStreaming && hasExportableChatContent();
+  elements.chatExport.disabled = !ready;
+  elements.chatExport.setAttribute("aria-disabled", ready ? "false" : "true");
+}
+
+function exportChatMarkdown() {
+  (window.__debug ??= []).push({ evt: "export-entered", chatHistoryLen: chatHistory.length, snapshot: chatHistory.map((m) => ({ role: m?.role, pending: m?.pending, len: m?.content?.length })) });
+  if (!hasExportableChatContent()) return;
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  const readable = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const sections = [`# ThePlatExchange Chat`, `_Exported ${readable}_`];
+  for (const message of chatHistory) {
+    if (message?.pending) continue;
+    if (message?.role !== "user" && message?.role !== "assistant") continue;
+    const content = typeof message.content === "string" ? message.content.trim() : "";
+    if (!content) continue;
+    const heading = message.role === "user" ? "## You" : "## Cephalon Simaris";
+    sections.push(`${heading}\n\n${content}`);
+  }
+  const markdown = `${sections.join("\n\n")}\n`;
+  const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `plat-exchange-chat-${stamp}.md`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function chatBubbleHtml(message) {
@@ -899,6 +1073,7 @@ function setChatStreaming(streaming, status) {
   if (elements.chatSubmit) elements.chatSubmit.disabled = streaming;
   if (elements.chatInput) elements.chatInput.disabled = streaming;
   setChatStatus(status);
+  updateChatExportState();
 }
 
 function setChatStatus(status) {
@@ -3177,6 +3352,66 @@ function switchSettingsTab(tabName) {
   for (const panel of elements.settingsPanels) panel.hidden = panel.dataset.settingsPanel !== tabName;
 }
 
+function renderCephalonPicker() {
+  if (!elements.cephalonPicker) return;
+  elements.cephalonPicker.innerHTML = AVATAR_CEPHALONS.map((entry) => {
+    const active = entry.slug === assistantAvatarSlug;
+    return `<button type="button" role="radio" aria-checked="${active ? "true" : "false"}" class="avatar-tile${active ? " active" : ""}" data-avatar-slug="${escapeHtml(entry.slug)}" title="${escapeHtml(entry.name)}">`
+      + `<img src="${escapeHtml(entry.src)}" alt="" loading="lazy" decoding="async">`
+      + `<span class="avatar-tile-name">${escapeHtml(entry.name)}</span>`
+      + `</button>`;
+  }).join("");
+  if (elements.cephalonPickerCurrent) elements.cephalonPickerCurrent.textContent = currentAssistantAvatar().name;
+}
+
+function renderFramePicker() {
+  if (elements.framePickerSelect) {
+    elements.framePickerSelect.innerHTML = AVATAR_FRAMES.map((entry) => (
+      `<option value="${escapeHtml(entry.slug)}"${entry.slug === userAvatarSlug ? " selected" : ""}>${escapeHtml(entry.name)}</option>`
+    )).join("");
+  }
+  const current = currentUserAvatar();
+  if (elements.framePickerPreview) elements.framePickerPreview.src = current.src;
+  if (elements.framePickerCurrent) elements.framePickerCurrent.textContent = current.name;
+}
+
+function persistAvatar(key, slug) {
+  try { window.localStorage?.setItem(key, slug); } catch { /* storage unavailable — session-only */ }
+}
+
+function setAssistantAvatar(slug) {
+  const found = AVATAR_CEPHALONS.find((entry) => entry.slug === slug);
+  if (!found || found.slug === assistantAvatarSlug) return;
+  assistantAvatarSlug = found.slug;
+  persistAvatar(AVATAR_STORAGE.assistant, assistantAvatarSlug);
+  renderCephalonPicker();
+  renderChatMessages();
+}
+
+function setUserAvatar(slug) {
+  const found = AVATAR_FRAMES.find((entry) => entry.slug === slug);
+  if (!found || found.slug === userAvatarSlug) return;
+  userAvatarSlug = found.slug;
+  persistAvatar(AVATAR_STORAGE.user, userAvatarSlug);
+  renderFramePicker();
+  renderChatMessages();
+}
+
+if (elements.cephalonPicker) {
+  elements.cephalonPicker.addEventListener("click", (event) => {
+    const target = event.target instanceof HTMLElement ? event.target.closest("[data-avatar-slug]") : null;
+    if (!target) return;
+    setAssistantAvatar(target.dataset.avatarSlug);
+  });
+}
+if (elements.framePickerSelect) {
+  elements.framePickerSelect.addEventListener("change", (event) => {
+    setUserAvatar(event.target.value);
+  });
+}
+renderCephalonPicker();
+renderFramePicker();
+
 for (const tab of elements.settingsTabs) tab.addEventListener("click", () => switchSettingsTab(tab.dataset.settingsTab));
 if (elements.settingsButton) elements.settingsButton.addEventListener("click", () => openSettingsModal("data"));
 for (const button of document.querySelectorAll(".mcp-copy")) {
@@ -3405,6 +3640,7 @@ if (window.EventSource) {
 }
 
 applyPageBackground(currentPage);
+renderChatMessages();
 
 loadState().catch((error) => {
   if (elements.summary) elements.summary.textContent = error.message;
