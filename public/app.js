@@ -1,4 +1,3 @@
-window.__topMark = 1;
 const elements = {
   topBar: document.getElementById("topBar"),
   leftRail: document.getElementById("leftRail"),
@@ -76,6 +75,13 @@ const elements = {
   runNowSummary: document.getElementById("runNowSummary"),
   runNowList: document.getElementById("runNowList"),
   runNowPager: document.getElementById("runNowPager"),
+  farmingWarnings: document.getElementById("farmingWarnings"),
+  farmingCredits: document.querySelector('[data-farming-cards="credits"]'),
+  farmingEndo: document.querySelector('[data-farming-cards="endo"]'),
+  farmingKuva: document.querySelector('[data-farming-cards="kuva"]'),
+  farmingCountCredits: document.querySelector('[data-farming-count="credits"]'),
+  farmingCountEndo: document.querySelector('[data-farming-count="endo"]'),
+  farmingCountKuva: document.querySelector('[data-farming-count="kuva"]'),
   dataHealthSummary: document.getElementById("dataHealthSummary"),
   dataHealthSources: document.getElementById("dataHealthSources"),
   profileForm: document.getElementById("profileForm"),
@@ -330,6 +336,7 @@ const CHAT_INTERNAL_PAGES = Object.freeze({
   arcanes: "Arcanes",
   products: "Plat Engine",
   "run-now": "Run Now",
+  farming: "Farming",
   "data-health": "Data Health",
   planner: "Planner",
   markets: "Riven Markets",
@@ -526,18 +533,11 @@ if (elements.chatMessages) {
     navigate(page, { settingsTab: target.dataset.chatSettingsTab });
   });
 }
-window.__hereA = 1;
 if (elements.chatExport) {
-  window.__hereB = 1;
   elements.chatExport.addEventListener("click", () => {
-    window.__hereClick = (window.__hereClick ?? 0) + 1;
     exportChatMarkdown();
   });
-  window.__hereC = 1;
-} else {
-  window.__hereD = 1;
 }
-window.__hereE = 1;
 
 
 
@@ -872,7 +872,6 @@ function updateChatExportState() {
 }
 
 function exportChatMarkdown() {
-  (window.__debug ??= []).push({ evt: "export-entered", chatHistoryLen: chatHistory.length, snapshot: chatHistory.map((m) => ({ role: m?.role, pending: m?.pending, len: m?.content?.length })) });
   if (!hasExportableChatContent()) return;
   const now = new Date();
   const pad = (value) => String(value).padStart(2, "0");
@@ -884,7 +883,7 @@ function exportChatMarkdown() {
     if (message?.role !== "user" && message?.role !== "assistant") continue;
     const content = typeof message.content === "string" ? message.content.trim() : "";
     if (!content) continue;
-    const heading = message.role === "user" ? "## You" : "## Cephalon Simaris";
+    const heading = message.role === "user" ? "## You" : `## ${currentAssistantAvatar().name}`;
     sections.push(`${heading}\n\n${content}`);
   }
   const markdown = `${sections.join("\n\n")}\n`;
@@ -1135,6 +1134,10 @@ function renderVisiblePageSurfaces() {
   }
   if (currentPage === "run-now") {
     renderRunNow(latestState.product);
+    return;
+  }
+  if (currentPage === "farming") {
+    void refreshFarmingIfStale();
     return;
   }
   if (currentPage === "data-health") {
@@ -3628,11 +3631,121 @@ function formatNumber(value) {
   return NUMBER_FORMATTER.format(Number(value ?? 0));
 }
 
+const FARMING_STALE_MS = 60_000;
+let farmingState = { dashboard: null, loading: false, lastFetchedAt: 0 };
+
+async function refreshFarmingIfStale() {
+  const nowMs = Date.now();
+  if (farmingState.loading) return;
+  if (farmingState.dashboard && nowMs - farmingState.lastFetchedAt < FARMING_STALE_MS) {
+    renderFarming();
+    return;
+  }
+  await fetchFarming();
+}
+
+async function fetchFarming() {
+  if (farmingState.loading) return;
+  farmingState.loading = true;
+  try {
+    const response = await fetch("/api/farming");
+    if (!response.ok) throw new Error(`farming ${response.status}`);
+    farmingState.dashboard = await response.json();
+    farmingState.lastFetchedAt = Date.now();
+    renderFarming();
+  } catch {
+    // Leave the last-good render in place; the global heartbeat retries.
+  } finally {
+    farmingState.loading = false;
+  }
+}
+
+function renderFarming() {
+  const dashboard = farmingState.dashboard;
+  if (!dashboard) return;
+  renderFarmingColumn("credits", elements.farmingCredits, elements.farmingCountCredits, dashboard.credits ?? []);
+  renderFarmingColumn("endo", elements.farmingEndo, elements.farmingCountEndo, dashboard.endo ?? []);
+  renderFarmingColumn("kuva", elements.farmingKuva, elements.farmingCountKuva, dashboard.kuva ?? []);
+  const warnings = Array.isArray(dashboard.warnings) ? dashboard.warnings : [];
+  if (elements.farmingWarnings) {
+    if (warnings.length === 0) {
+      elements.farmingWarnings.hidden = true;
+      elements.farmingWarnings.innerHTML = "";
+    } else {
+      elements.farmingWarnings.hidden = false;
+      elements.farmingWarnings.innerHTML = warnings.map((warning) => `<div class="farming-warning">${escapeHtml(warning)}</div>`).join("");
+    }
+  }
+}
+
+const FARMING_COLUMN_FOOTER = {
+  kuva: "Kuva Siphon and Kuva Flood rotate hourly here. When nothing is live, run Kuva Fortress Survival (Taveuni) — Kuva canisters drop between rotations.",
+  endo: "",
+  credits: "",
+};
+
+function renderFarmingColumn(category, container, countEl, cards) {
+  if (!container) return;
+  if (countEl) countEl.textContent = String(cards.length);
+  const footer = FARMING_COLUMN_FOOTER[category] ? `<p class="farming-column-footer">${escapeHtml(FARMING_COLUMN_FOOTER[category])}</p>` : "";
+  if (cards.length === 0) {
+    container.innerHTML = `<div class="farming-empty">No active ${escapeHtml(category)} rotation right now — check back on the next hourly refresh.</div>${footer}`;
+    return;
+  }
+  container.innerHTML = cards.map((card) => farmingCardHtml(card)).join("") + footer;
+}
+
+function farmingCardHtml(card) {
+  const expiryText = card.expiry ? formatRelativeExpiry(card.expiry) : "";
+  const expiryChip = expiryText
+    ? `<span class="farming-expiry" title="${escapeHtml(card.expiry)}">ends ${escapeHtml(expiryText)}</span>`
+    : "";
+  const tier = card.tier ? `<span class="farming-tier farming-tier-${escapeHtml(card.tier.toLowerCase())}">Tier ${escapeHtml(card.tier)}</span>` : "";
+  const meta = card.missionType || card.faction || card.node
+    ? `<div class="farming-meta">${[card.missionType, card.faction, card.node].filter(Boolean).map((entry) => `<span>${escapeHtml(entry)}</span>`).join("")}</div>`
+    : "";
+  const rewards = (card.rewards ?? []).map((line) => `<li>${escapeHtml(line)}</li>`).join("");
+  const detail = card.detail ? `<p class="farming-detail">${escapeHtml(card.detail)}</p>` : "";
+  const warnings = (card.warnings ?? []).length > 0
+    ? `<ul class="farming-warnings-list">${(card.warnings ?? []).map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>`
+    : "";
+  return `
+    <article class="farming-card" data-farming-kind="${escapeHtml(card.kind ?? "")}">
+      <header class="farming-card-head">
+        <h3>${escapeHtml(card.title ?? "")}</h3>
+        ${expiryChip}
+      </header>
+      <div class="farming-card-badges">${tier}</div>
+      ${meta}
+      <ul class="farming-rewards">${rewards}</ul>
+      ${detail}
+      ${warnings}
+    </article>
+  `;
+}
+
+function formatRelativeExpiry(iso) {
+  const target = Date.parse(iso);
+  if (!Number.isFinite(target)) return iso;
+  const deltaMs = target - Date.now();
+  if (deltaMs <= 0) return "expired";
+  const seconds = Math.floor(deltaMs / 1000);
+  if (seconds < 60) return `in ${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `in ${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `in ${hours}h ${minutes % 60}m`;
+  const days = Math.floor(hours / 24);
+  return `in ${days}d ${hours % 24}h`;
+}
+
+
 if (window.EventSource) {
   const events = new EventSource("/events");
   events.addEventListener("state", async (event) => {
     render(JSON.parse(event.data));
     await refreshDerived();
+    if (currentPage === "farming") void refreshFarmingIfStale();
   });
   events.addEventListener("error", () => {
     // Native EventSource reconnects automatically.
@@ -3645,5 +3758,8 @@ renderChatMessages();
 loadState().catch((error) => {
   if (elements.summary) elements.summary.textContent = error.message;
 });
-setInterval(() => { loadState().catch(() => refreshDerived().catch(() => undefined)); }, HEARTBEAT_MS);
+setInterval(() => {
+  loadState().catch(() => refreshDerived().catch(() => undefined));
+  if (currentPage === "farming") void refreshFarmingIfStale();
+}, HEARTBEAT_MS);
 window.addEventListener("resize", scheduleChartRedraw);

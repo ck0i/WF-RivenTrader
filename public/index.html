@@ -89,6 +89,7 @@
           <button class="rail-item" data-page="arcanes" type="button"><span class="rail-icon">✦</span><span class="rail-label">Arcanes</span></button>
           <button class="rail-item" data-page="products" type="button"><span class="rail-icon">◇</span><span class="rail-label">Plat Engine</span></button>
           <button class="rail-item" data-page="run-now" type="button"><span class="rail-icon">▶</span><span class="rail-label">Run Now</span></button>
+          <button class="rail-item" data-page="farming" type="button"><span class="rail-icon">✧</span><span class="rail-label">Farming</span></button>
           <button class="rail-item" data-page="data-health" type="button"><span class="rail-icon">◌</span><span class="rail-label">Data Health</span></button>
           <button class="rail-item" data-page="planner" type="button"><span class="rail-icon">☑</span><span class="rail-label">Planner</span></button>
           <button class="rail-item" data-page="markets" type="button"><span class="rail-icon">▦</span><span class="rail-label">Riven Markets</span></button>
@@ -341,6 +342,40 @@
             </div>
             <div id="runNowList" class="run-now-list run-now-board"></div>
             <div id="runNowPager" class="page-meter floating-page-meter"></div>
+          </div>
+        </section>
+
+        <section class="page" data-page-panel="farming" aria-labelledby="farmingTitle">
+          <div class="page-inner farming-page">
+            <div class="page-heading">
+              <div>
+                <h1 id="farmingTitle">Farming</h1>
+              </div>
+            </div>
+            <div id="farmingWarnings" class="farming-warnings" hidden></div>
+            <div class="farming-grid">
+              <section class="panel farming-column" data-farming-category="credits" aria-labelledby="farmingCreditsTitle">
+                <div class="farming-column-head">
+                  <h2 id="farmingCreditsTitle">Credits</h2>
+                  <span class="farming-count" data-farming-count="credits">0</span>
+                </div>
+                <div class="farming-cards" data-farming-cards="credits"></div>
+              </section>
+              <section class="panel farming-column" data-farming-category="endo" aria-labelledby="farmingEndoTitle">
+                <div class="farming-column-head">
+                  <h2 id="farmingEndoTitle">Endo</h2>
+                  <span class="farming-count" data-farming-count="endo">0</span>
+                </div>
+                <div class="farming-cards" data-farming-cards="endo"></div>
+              </section>
+              <section class="panel farming-column" data-farming-category="kuva" aria-labelledby="farmingKuvaTitle">
+                <div class="farming-column-head">
+                  <h2 id="farmingKuvaTitle">Kuva</h2>
+                  <span class="farming-count" data-farming-count="kuva">0</span>
+                </div>
+                <div class="farming-cards" data-farming-cards="kuva"></div>
+              </section>
+            </div>
           </div>
         </section>
 

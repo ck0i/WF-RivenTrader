@@ -8,6 +8,7 @@ import { handleOpenRouterChat } from "./chat.js";
 import { enrichOpportunity, type SignatureLookupHit } from "./mcp/schemas.js";
 import { attributeSignature } from "./wfm/opportunities.js";
 import { buildRunNowLiveArtifact, enforceRunNowWindow, fetchLiveActivitySnapshot, isRunNowArtifactUsable, isRunNowLiveArtifact, overlayRunNowArtifact, type RunNowLiveArtifact } from "./wfm/live.js";
+import { fetchFarmingDashboard, FARMING_TTL_SECONDS, type FarmingDashboard } from "./wfm/farming.js";
 import { isRecord, readBoolean, readNumber, readString } from "./wfm/guards.js";
 import type { ItemRef, NotificationChannel, NotificationThreshold, ProductDashboardState, ProductOpportunityAction, TodoStatus } from "./wfm/product.js";
 import type { NotificationRuleInput, PortfolioInput, ProfileUpdate, TodoInput, TodoUpdate } from "./wfm/userStore.js";
@@ -241,6 +242,8 @@ export function createAppServer(service: ThePlatExchangeService, options: AppSer
   const remote = options.remoteFallback ? new RemoteFallback(options.remoteFallback) : null;
   const imageCacheDir = options.imageCacheDir ?? join(process.cwd(), ".cache", "the-plat-exchange", "images");
   const imageProxy = new ImageProxy(imageCacheDir);
+  let farmingCache: { fetchedAt: number; payload: FarmingDashboard } | null = null;
+  let farmingInflight: Promise<FarmingDashboard> | null = null;
 
   return createServer(async (request, response) => {
     try {
@@ -289,6 +292,23 @@ export function createAppServer(service: ThePlatExchangeService, options: AppSer
       }
       if (request.method === "GET" && url.pathname === "/api/instant-wins") {
         sendJson(response, 200, computeInstantWins(service, url));
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/farming") {
+        const nowMs = Date.now();
+        const stale = !farmingCache || nowMs - farmingCache.fetchedAt > FARMING_TTL_SECONDS * 1000;
+        if (stale && !farmingInflight) {
+          farmingInflight = fetchFarmingDashboard(RUN_NOW_DIRECT_USER_AGENT)
+            .then((payload) => {
+              farmingCache = { fetchedAt: Date.now(), payload };
+              return payload;
+            })
+            .finally(() => {
+              farmingInflight = null;
+            });
+        }
+        const payload = stale && farmingInflight ? await farmingInflight : farmingCache!.payload;
+        sendJson(response, 200, payload);
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/arcanes") {
