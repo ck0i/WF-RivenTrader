@@ -1,11 +1,11 @@
 {
   "versions": {
     "items": "MjAyNi0wNy0xMVQxNDo1MDoyMQ==",
-    "rivens": "MjAyNi0wNi0xOVQwMzo0MjozNw==",
+    "rivens": "MjAyNi0wNy0xMVQxNTozMDowMw==",
     "liches": "MjAyNi0wNC0xOFQxNzo0Nzo1MA==",
     "sisters": "MjAyNi0wNC0xOFQxNzo0Nzo1MA==",
     "missions": "MjAyNi0wMy0yNlQxMjo1MDo0NA==",
-    "npcs": "MjAyNi0wNy0xMVQxNDo1ODowMQ==",
+    "npcs": "MjAyNi0wNy0xMVQxNTo0NzoxMg==",
     "locations": "MjAyNi0wNi0xN1QyMToxNjo0OA=="
   },
   "rivenWeapons": [
@@ -4988,6 +4988,17 @@
       "icon": "items/images/en/pride.ace6ac2848bfe134898c2b3c70e97620.webp",
       "thumb": "items/images/en/thumbs/pride.ace6ac2848bfe134898c2b3c70e97620.128x128.webp",
       "imageName": "TnSiriusScytheWeapon.png"
+    },
+    {
+      "id": "6a52617bcfb1ce3a499be63a",
+      "slug": "haalvu",
+      "name": "Haalvu",
+      "group": "primary",
+      "rivenType": "rifle",
+      "disposition": 0.5,
+      "reqMasteryRank": 8,
+      "icon": "items/images/en/haalvu.3fe5113ddf9623c6d38b45fcc86cdeb3.webp",
+      "thumb": "items/images/en/thumbs/haalvu.3fe5113ddf9623c6d38b45fcc86cdeb3.128x128.webp"
     }
   ],
   "rivenAttributes": [
@@ -5248,6 +5259,6 @@
       "name": "Chance to Gain Combo Count"
     }
   ],
-  "loadedAt": "2026-07-11T15:14:53.480Z",
-  "versionsUpdatedAt": "2026-07-11T14:58:01Z"
+  "loadedAt": "2026-07-11T16:12:14.371Z",
+  "versionsUpdatedAt": "2026-07-11T15:47:12Z"
 }
